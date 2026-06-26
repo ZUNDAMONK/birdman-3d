@@ -1,0 +1,6 @@
+# Installers / large binaries (not part of the project)
+*.exe
+
+# OS / editor cruft
+Thumbs.db
+.DS_Store
