@@ -53,12 +53,19 @@
   #views button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
   #fpvBtn.on,#hudBtn.on{background:var(--ink);color:#fff}
   #hint{position:absolute;bottom:8px;left:10px;font-size:10.5px;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.5);opacity:.85}
+  #fairingOverlay{position:absolute;inset:0;pointer-events:none;display:none;z-index:2}
+  #fairingOverlay.on{display:block}
+  #fairingOverlay svg{width:100%;height:100%}
   #hud{position:absolute;inset:0;pointer-events:none;display:none}
   #hud.on{display:block}
   #hud svg{width:100%;height:100%}
   /* 右側パネル: 高度・速度グラフ(灰色半透明・奥が透ける) */
-  #sidePanel{position:absolute;top:10px;right:10px;bottom:78px;width:230px;display:none;
+  #sidePanel{position:absolute;top:10px;right:10px;bottom:78px;width:300px;display:none;
     flex-direction:column;gap:8px;pointer-events:none;z-index:3}
+  #sidePanel .sp-row{flex-direction:row;gap:8px;align-items:stretch}
+  #sidePanel .sp-row .sp-gps,#sidePanel .sp-row .sp-spd{display:flex;flex-direction:column;min-height:0}
+  #sidePanel .sp-row .sp-gps{flex:0 0 130px}
+  #sidePanel .sp-row .sp-spd{flex:1}
   #sidePanel.on{display:flex}
   #sidePanel .sp-box{flex:1;background:rgba(70,78,90,0.34);backdrop-filter:blur(2px);
     border:1px solid rgba(255,255,255,0.18);border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;min-height:0}
@@ -100,21 +107,21 @@
   body.flight-mode header{display:none}
   body.flight-mode #main{height:100vh}
   /* 設定アイコン(左上・飛行モードのみ表示) */
-  #settingsIcon{position:absolute;top:10px;left:10px;display:none;z-index:7;
+  #settingsIcon{position:absolute;top:50px;left:10px;display:none;z-index:7;
     background:rgba(56,62,72,0.55);color:#fff;border:1px solid rgba(255,255,255,0.3);
     border-radius:8px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;
     backdrop-filter:blur(4px);box-shadow:0 2px 8px rgba(0,0,0,.25)}
   #settingsIcon:hover{background:rgba(63,167,255,0.7)}
   body.flight-mode #settingsIcon{display:block}
   /* 戻るボタン(設計へ・飛行モードのみ右上) */
-  #flightExit{position:absolute;top:10px;right:10px;display:none;z-index:7;
+  #flightExit{position:absolute;bottom:10px;right:10px;display:none;z-index:7;
     background:rgba(56,62,72,0.55);color:#fff;border:1px solid rgba(255,255,255,0.3);
     border-radius:8px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;
     backdrop-filter:blur(4px);box-shadow:0 2px 8px rgba(0,0,0,.25)}
   #flightExit:hover{background:rgba(63,167,255,0.7)}
   body.flight-mode #flightExit{display:block}
   /* 設定パネル(設定アイコンクリックで開く) */
-  #settingsPanel{position:absolute;top:48px;left:10px;width:340px;max-height:calc(100% - 130px);
+  #settingsPanel{position:absolute;top:94px;left:10px;width:340px;max-height:calc(100% - 130px);
     overflow-y:auto;display:none;z-index:8;background:rgba(248,250,252,0.97);
     border:1px solid var(--line);border-radius:12px;padding:12px;
     box-shadow:0 8px 28px rgba(0,0,0,.28)}
@@ -209,14 +216,26 @@
       <button id="flightExit">🛠 設計に戻る</button>
       <div id="settingsPanel"></div>
       <div id="hud"></div>
+      <div id="fairingOverlay"><svg viewBox="0 0 100 100" preserveAspectRatio="none">
+        <!-- フェアリング: 下部と左右をマスク。中央楕円窓のみ視界確保 -->
+        <ellipse cx="50" cy="52" rx="36" ry="28" fill="none" stroke="none"/>
+        <path d="M0,0 H100 V100 H0 Z M50,24 m-36,28 a36,28 0 1,0 72,0 a36,28 0 1,0 -72,0" fill="rgba(30,42,60,0.72)" fill-rule="evenodd"/>
+        <ellipse cx="50" cy="52" rx="36" ry="28" fill="none" stroke="rgba(160,200,230,0.35)" stroke-width="0.8"/>
+      </svg></div>
       <div id="sidePanel">
         <div class="sp-box">
           <div class="sp-title">Altitude <span id="spAltVal"></span></div>
           <canvas id="spAlt"></canvas>
         </div>
-        <div class="sp-box">
-          <div class="sp-title">Speed <span id="spSpdVal"></span></div>
-          <canvas id="spSpd"></canvas>
+        <div class="sp-box sp-row">
+          <div class="sp-gps">
+            <div class="sp-title">GPS <span id="gpsVal"></span></div>
+            <canvas id="gpsMap"></canvas>
+          </div>
+          <div class="sp-spd">
+            <div class="sp-title">Speed <span id="spSpdVal"></span></div>
+            <canvas id="spSpd"></canvas>
+          </div>
         </div>
       </div>
       <div id="flightData"></div>
@@ -245,14 +264,15 @@
 const st = {
   planform:"taper", span:28, rootChord:1.0, tipChord:0.55, wingX:1.5, dihedral:1.5, jig:"dihedral",
   airfoil:"dae31", washout:2.0, incidence:3.0, sweep:0,
-  ribPitch:0.25, plankRatio:30,
+  ribPitch:0.25, plankTop:30, plankBot:30, plankRearTop:0, plankRearBot:0,
   mode:"none", ailSpanFrac:0, ailChordFrac:0,
-  config:"pylon", propDia:3.0, propBlades:2,
-  posture:"semi", seatX:1.85, pilotW:60, cd0Add:0.002, powerMax:270, gear:"mono",
+  config:"tractor", propDia:2.8, propBlades:2, propMat:"balsa",
+  posture:"semi", seatX:1.85, pilotW:60, cd0Add:0.002, powerMax:270, fairing:false, gear:"tandem",
   segments:4, rootDia:110, tipDia:60, sparMod:230,
-  drive:"chain",
+  drive:"chain", driveEffPct:97,
   hShape:"taper", hSpan:3.4, hChord:0.6, tailArm:5.0,
   vShape:"swept", vHeight:1.3, vChord:0.6, elevRatio:1.0, rudRatio:1.0,
+  boomWing:"none", boomWingSpan:1.0, boomWingChord:0.3, boomWingPos:0.5,
 };
 
 const TPL = {
@@ -279,15 +299,18 @@ const TPL = {
     {id:"sparse",n:"疎(350mm)",d:"軽量/フィルム波打ち注意",v:{ribPitch:0.35}},
     {id:"ultra",n:"超密(120mm)",d:"翼型精度を極める。記録狙い上位校流/重い",v:{ribPitch:0.12}}],
   plank:[
-    {id:"le",n:"前縁のみ(15%)",d:"最軽量",v:{plankRatio:15}},
-    {id:"std",n:"標準(30%)",d:"層流維持と剛性の両立",v:{plankRatio:30}},
-    {id:"dbox",n:"Dボックス(45%)",d:"ねじり剛性◎/重量増",v:{plankRatio:45}},
-    {id:"full",n:"フルプランク(60%)",d:"層流翼を狙う。表面品質勝負/最重",v:{plankRatio:60}}],
+    {id:"le",n:"前縁のみ(15%)",d:"最軽量。上下とも前縁15%",v:{plankTop:15,plankBot:15,plankRearTop:0,plankRearBot:0}},
+    {id:"std",n:"標準(30%)",d:"層流維持と剛性の両立",v:{plankTop:30,plankBot:30,plankRearTop:0,plankRearBot:0}},
+    {id:"dbox",n:"Dボックス(45%)",d:"ねじり剛性◎/重量増",v:{plankTop:45,plankBot:45,plankRearTop:0,plankRearBot:0}},
+    {id:"full",n:"フルプランク(60%)",d:"層流翼を狙う。表面品質勝負/最重",v:{plankTop:60,plankBot:60,plankRearTop:0,plankRearBot:0}},
+    {id:"dbox2",n:"前後Dボックス(30+20%)",d:"前縁+後縁でねじり剛性を確保",v:{plankTop:30,plankBot:30,plankRearTop:20,plankRearBot:20}},
+    {id:"lam",n:"上面層流重視",d:"上面50%厚プランク・下面は前縁20%のみ。軽量に層流面を確保",v:{plankTop:50,plankBot:20,plankRearTop:0,plankRearBot:0}}],
   ail:[
     {id:"none",n:"エルロンなし",d:"上反角+ラダーで旋回",v:{mode:"none",ailSpanFrac:0,ailChordFrac:0}},
     {id:"small",n:"翼端エルロン(小)",d:"外翼15%。ロール補助",v:{mode:"small",ailSpanFrac:0.15,ailChordFrac:0.25}},
     {id:"large",n:"翼端エルロン(大)",d:"外翼25%。機動性重視",v:{mode:"large",ailSpanFrac:0.25,ailChordFrac:0.3}},
-    {id:"flaperon",n:"フラッペロン(全幅)",d:"全翼幅可動。横風着陸◎/機構複雑",v:{mode:"large",ailSpanFrac:0.4,ailChordFrac:0.25}}],
+    {id:"flaperon",n:"フラッペロン(全幅)",d:"全翼幅可動。横風着陸◎/機構複雑",v:{mode:"large",ailSpanFrac:0.4,ailChordFrac:0.25}},
+    {id:"allmove",n:"全遊動エルロン",d:"エルロン区間全体が角度変化。低速高効率/製作精度が命",v:{mode:"allmove",ailSpanFrac:0.2,ailChordFrac:1.0}}],
   prop:[
     {id:"tractor",n:"機首・牽引式",d:"駆動短い/後流が機体に当たる",v:{config:"tractor",propDia:2.8}},
     {id:"pylon",n:"パイロン・推進式",d:"翼上後方。効率◎",v:{config:"pylon",propDia:3.0}},
@@ -295,6 +318,9 @@ const TPL = {
     {id:"pusher",n:"機尾・推進式",d:"シャフトが長く重い",v:{config:"pusher",propDia:2.6}},
     {id:"hp",n:"大径・高効率牽引",d:"低回転大径ペラ。効率最優先",v:{config:"tractor",propDia:3.4}},
     {id:"cr",n:"二重反転ペラ",d:"反トルク相殺・効率◎/機構が複雑",v:{config:"tractor",propDia:3.0}}],
+  propMat:[
+    {id:"balsa",n:"バルサ",d:"木製・安価で製作容易/やや重く剛性中",v:{propMat:"balsa"}},
+    {id:"carp",n:"CFRP(カーボン)",d:"軽量・高剛性で形状を保持→効率◎/高コスト",v:{propMat:"carbon"}}],
   pilot:[
     {id:"upright",n:"アップライト",d:"出力◎/前面投影面積大",v:{posture:"upright",cd0Add:0.004,powerMax:280}},
     {id:"semi",n:"セミリカンベント",d:"バランス型(主流)",v:{posture:"semi",cd0Add:0.002,powerMax:270}},
@@ -302,12 +328,11 @@ const TPL = {
     {id:"ace",n:"エースパイロット",d:"持続出力が高い。性能計測で真価",v:{posture:"semi",cd0Add:0.002,powerMax:320}},
     {id:"rookie",n:"初心者パイロット",d:"出力控えめ。機体効率がより重要に",v:{posture:"semi",cd0Add:0.002,powerMax:200}}],
   drive:[
-    {id:"chain",n:"ねじりチェーン駆動",d:"軽量・高効率/張力管理が必要",v:{drive:"chain"}},
-    {id:"shaft",n:"シャフト+ベベルギア",d:"確実・整備性◎/やや重い",v:{drive:"shaft"}}],
+    {id:"chain",n:"ねじりチェーン駆動",d:"軽量・高効率/張力管理が必要",v:{drive:"chain",driveEffPct:97}},
+    {id:"shaft",n:"シャフト+ベベルギア",d:"確実・整備性◎/やや重い",v:{drive:"shaft",driveEffPct:93}}],
   gear:[
     {id:"none",n:"なし(発進台専用)",d:"プラットフォーム発進機。地上滑走できない",v:{gear:"none"}},
-    {id:"mono",n:"単輪+尾輪",d:"軽量。テストフライトの最小構成",v:{gear:"mono"}},
-    {id:"tri",n:"三輪式",d:"安定して滑走・着陸できる/やや重い",v:{gear:"tri"}}],
+    {id:"tandem",n:"前後2輪(座席前後)",d:"座席前方+後方に1輪ずつ。軽量で低抵抗",v:{gear:"tandem"}}],
   spar:[
     {id:"const3",n:"一定径・3分割",d:"製作容易/翼端過剰強度",v:{segments:3,rootDia:100,tipDia:100}},
     {id:"taper4",n:"テーパー桁・4分割",d:"軽量(標準)",v:{segments:4,rootDia:110,tipDia:60}},
@@ -317,19 +342,31 @@ const TPL = {
   ht:[
     {id:"rect",n:"矩形",d:"製作容易",v:{hShape:"rect",hSpan:3.0,hChord:0.55}},
     {id:"taper",n:"テーパー",d:"軽量・標準",v:{hShape:"taper",hSpan:3.4,hChord:0.6}},
-    {id:"ellipse",n:"楕円",d:"美しいが製作難",v:{hShape:"ellipse",hSpan:3.2,hChord:0.62}}],
+    {id:"ellipse",n:"楕円",d:"美しいが製作難",v:{hShape:"ellipse",hSpan:3.2,hChord:0.62}},
+    {id:"swept",n:"後退翼",d:"後退角付き。翼端失速が穏やか",v:{hShape:"swept",hSpan:3.6,hChord:0.58}},
+    {id:"delta",n:"デルタ型",d:"短テールアームでも面積確保",v:{hShape:"delta",hSpan:2.8,hChord:0.75}}],
   vt:[
     {id:"rect",n:"矩形",d:"製作容易",v:{vShape:"rect",vHeight:1.2,vChord:0.55}},
     {id:"swept",n:"後退",d:"アームを稼げる",v:{vShape:"swept",vHeight:1.3,vChord:0.6}},
-    {id:"ellipse",n:"楕円",d:"軽量だが製作難",v:{vShape:"ellipse",vHeight:1.25,vChord:0.6}}],
+    {id:"ellipse",n:"楕円",d:"軽量だが製作難",v:{vShape:"ellipse",vHeight:1.25,vChord:0.6}},
+    {id:"delta",n:"デルタ",d:"根元が広く剛性高い",v:{vShape:"delta",vHeight:1.4,vChord:0.65}},
+    {id:"dorsal",n:"背びれ型",d:"根元広・先端細。自然な流線形",v:{vShape:"dorsal",vHeight:1.35,vChord:0.6}}],
   elev:[
     {id:"allmove",n:"全可動式",d:"低速で効きが良い(主流)",v:{elevRatio:1.0}},
     {id:"flap30",n:"舵面式(30%)",d:"後縁のみ可動",v:{elevRatio:0.3}}],
   rud:[
     {id:"allmove",n:"全可動式",d:"垂直尾翼全体が回る",v:{rudRatio:1.0}},
     {id:"flap35",n:"舵面式(35%)",d:"後縁35%可動",v:{rudRatio:0.35}}],
+  fairing:[
+    {id:"off",n:"フェアリングなし",d:"開放型コックピット。製作容易",v:{fairing:false}},
+    {id:"on",n:"フェアリングあり",d:"空気抵抗低減(CD0 -0.0012)。重量増",v:{fairing:true}}],
+  boomWing:[
+    {id:"none",n:"ビーム翼なし",d:"標準構成",v:{boomWing:"none"}},
+    {id:"LR",n:"左右対称",d:"安定性寄与。左右同時装備",v:{boomWing:"LR"}},
+    {id:"L",n:"左のみ",d:"片側装備(試験用途)",v:{boomWing:"L"}},
+    {id:"R",n:"右のみ",d:"片側装備(試験用途)",v:{boomWing:"R"}}],
 };
-const tplSel = {airfoil:"dae31",wing:"taper",jig:"dihedral",rib:"std",plank:"std",ail:"none",prop:"pylon",pilot:"semi",drive:"chain",gear:"mono",spar:"taper4",ht:"taper",vt:"swept",elev:"allmove",rud:"allmove"};
+const tplSel = {airfoil:"dae31",wing:"taper",jig:"dihedral",rib:"std",plank:"std",ail:"none",prop:"tractor",propMat:"balsa",pilot:"semi",drive:"chain",gear:"tandem",spar:"taper4",ht:"taper",vt:"swept",elev:"allmove",rud:"allmove",fairing:"off",boomWing:"none"};
 
 // ================= 解析 =================
 const lerp=(a,b,t)=>a+(b-a)*t;
@@ -365,23 +402,27 @@ function analyze(st){
   const half=st.span/2;
   const wingLE=st.wingX, xAC=wingLE+0.25*MAC, xHT=xAC+st.tailArm, xVT=xHT-0.1;
   const fusLen=xHT+st.hChord*0.8;
+  // テールビームの前端(zF)〜尾端(fusLen)。プロペラ位置はこのビームを基準にする
+  const zBeamF=st.seatX-0.55;
   let xProp;
-  if(st.config==="tractor")xProp=0.05;
+  if(st.config==="tractor")xProp=st.seatX-1.5;                 // 機首(パイロット足より前方)=テールビーム前端の延長
   else if(st.config==="pylon")xProp=wingLE+MAC+0.6;
-  else if(st.config==="midboom")xProp=(wingLE+MAC+fusLen*0.85)/2; // 主翼〜尾翼間の桁の中間
-  else xProp=fusLen*0.85;
-  const Sh=st.hShape==="ellipse"?(Math.PI/4)*st.hSpan*st.hChord:st.hSpan*st.hChord*(st.hShape==="taper"?0.8:1);
-  const Sv=st.vShape==="ellipse"?(Math.PI/4)*st.vHeight*st.vChord:st.vHeight*st.vChord*(st.vShape==="swept"?0.85:1);
+  else if(st.config==="midboom")xProp=(zBeamF+fusLen)/2;       // テールビーム中間
+  else xProp=fusLen;                                           // 機尾=テールビーム後端
+  const Sh=st.hShape==="ellipse"?(Math.PI/4)*st.hSpan*st.hChord:st.hSpan*st.hChord*(st.hShape==="taper"?0.8:st.hShape==="swept"?0.82:st.hShape==="delta"?0.55:1);
+  const Sv=st.vShape==="ellipse"?(Math.PI/4)*st.vHeight*st.vChord:st.vHeight*st.vChord*(st.vShape==="swept"||st.vShape==="dorsal"?0.85:st.vShape==="delta"?0.60:1);
   const nRibs=Math.floor(half/st.ribPitch)*2;
-  const wRibs=nRibs*0.042, wPlank=S*(st.plankRatio/100)*0.26, wFilm=S*2.05*0.034;
+  const plankFrac=((st.plankTop+st.plankBot+(st.plankRearTop||0)+(st.plankRearBot||0))/2)/100; // 上下面平均の被覆率
+  const wRibs=nRibs*0.042, wPlank=S*plankFrac*0.26, wFilm=S*2.05*0.034;
   const avgDia=(st.rootDia+st.tipDia)/2, wSpar=st.span*0.004*avgDia*(0.92+0.08*(st.sparMod||230)/230), wJoints=(st.segments-1)*2*0.18;
   const wAil=st.mode==="none"?0:st.ailSpanFrac*st.span*0.25+0.3;
-  const wWing=wRibs+wPlank+wFilm+wSpar+wJoints+wAil;
+  const wBoomWing=(st.boomWing&&st.boomWing!=="none")?((st.boomWing==="LR"?2:1)*(st.boomWingSpan||1.0)*(st.boomWingChord||0.3)*0.55+0.12):0;
+  const wWing=wRibs+wPlank+wFilm+wSpar+wJoints+wAil+wBoomWing;
   const wHT=Sh*0.55+(st.elevRatio<1?0.15:0.05), wVT=Sv*0.55+(st.rudRatio<1?0.12:0.05);
   const boomLen=fusLen-(wingLE+MAC*0.6), wBoom=Math.max(0,boomLen)*0.32;
   const wCockpit=3.2+(st.posture==="upright"?0.3:0);
   const driveDist=Math.abs(xProp-st.seatX)+(st.config==="pylon"?1.2:0);
-  const wDrive=1.2+driveDist*0.35, wProp=0.45+st.propDia*0.18, wMisc=1.0;
+  const wDrive=1.2+driveDist*0.35, wProp=(0.45+st.propDia*0.18)*(st.propMat==="carbon"?0.78:1.0)*(0.8+0.1*(st.propBlades||2)), wMisc=1.0;
   const wEmpty=wWing+wHT+wVT+wBoom+wCockpit+wDrive+wProp+wMisc;
   const W=(wEmpty+st.pilotW)*g;
   const pilotCGx=st.seatX+(st.posture==="upright"?-0.05:st.posture==="semi"?-0.15:-0.25);
@@ -397,7 +438,7 @@ function analyze(st){
   const xNP=xAC+MAC*Vh*tailEff*0.72;
   const SM=(xNP-xCG)/MAC*100;
   const CL=1.0, V=Math.sqrt(2*W/(rho*S*CL));
-  const CD0=0.014+st.cd0Add+(st.config==="pylon"?0.0015:0)+(st.mode!=="none"?0.0008:0);
+  const CD0=0.014+st.cd0Add+(st.config==="pylon"?0.0015:0)+(st.mode!=="none"?0.0008:0)+(st.fairing?-0.0012:0);
   const e=st.planform==="rect"?0.82:(st.planform==="crescent"||st.planform==="ellipse")?0.92:0.88;
   const CDi=CL*CL/(Math.PI*AR*e);
   const D=0.5*rho*V*V*S*(CD0+CDi);
@@ -466,57 +507,83 @@ const designGroup = new THREE.Group(); scene.add(designGroup);
 }
 const lake = new THREE.Mesh(new THREE.PlaneGeometry(20000,20000),
   new THREE.MeshPhongMaterial({color:0x7fa8c9, map:waterTexture(), shininess:90, specular:0x46627e}));
-lake.rotation.x = -Math.PI/2; lake.position.y = -0.02; envGroup.add(lake);
+lake.rotation.x = -Math.PI/2; lake.position.y = -0.35; envGroup.add(lake);
 const grid = new THREE.GridHelper(2400, 240, 0x9fbcd4, 0xa9c4da);
 grid.position.set(0,0,-45); envGroup.add(grid); // 湖側にスケールグリッド
 
 // 岸+テストフライト用滑走路(機体後方の陸地)
 const shore=new THREE.Group();
-const grass=new THREE.Mesh(new THREE.PlaneGeometry(120,520), new THREE.MeshLambertMaterial({color:0x8fae7e}));
-grass.rotation.x=-Math.PI/2; grass.position.set(0,0.015,270); shore.add(grass);   // z=10..530
-const sand=new THREE.Mesh(new THREE.PlaneGeometry(90,6), new THREE.MeshLambertMaterial({color:0xd9cda8}));
-sand.rotation.x=-Math.PI/2; sand.position.set(0,0.012,11.5); shore.add(sand);     // 波打ち際
-const rwy=new THREE.Mesh(new THREE.PlaneGeometry(10,500), new THREE.MeshLambertMaterial({color:0x575f68}));
-rwy.rotation.x=-Math.PI/2; rwy.position.set(0,0.03,264); shore.add(rwy);          // z=14..514
-for(let z=24;z<508;z+=14){ // センターライン
-  const m=new THREE.Mesh(new THREE.PlaneGeometry(0.35,5), new THREE.MeshBasicMaterial({color:0xffffff}));
+// 陸地(会場=東岸)は水際 z=8 から後方のみ。前方(-z)は琵琶湖(機体はここを飛ぶ)
+const grass=new THREE.Mesh(new THREE.PlaneGeometry(260,2112), new THREE.MeshLambertMaterial({color:0x8fae7e}));
+grass.rotation.x=-Math.PI/2; grass.position.set(0,0.015,1064); shore.add(grass);   // z=8..2120
+const sand=new THREE.Mesh(new THREE.PlaneGeometry(260,8), new THREE.MeshLambertMaterial({color:0xd9cda8}));
+sand.rotation.x=-Math.PI/2; sand.position.set(0,0.012,8); shore.add(sand);         // 波打ち際(z=4..12)
+const rwy=new THREE.Mesh(new THREE.PlaneGeometry(30,2000), new THREE.MeshLambertMaterial({color:0x575f68}));
+rwy.rotation.x=-Math.PI/2; rwy.position.set(0,0.03,1014); shore.add(rwy);          // 幅30m・z=14..2014
+for(let z=24;z<2008;z+=24){ // センターライン
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(0.4,8), new THREE.MeshBasicMaterial({color:0xffffff}));
   m.rotation.x=-Math.PI/2; m.position.set(0,0.045,z); shore.add(m);
 }
-for(const z of [17,511]){ // スレッショルド
-  const b=new THREE.Mesh(new THREE.PlaneGeometry(7,1.4), new THREE.MeshBasicMaterial({color:0xffffff}));
+for(const z of [18,2010]){ // スレッショルド
+  const b=new THREE.Mesh(new THREE.PlaneGeometry(22,1.6), new THREE.MeshBasicMaterial({color:0xffffff}));
   b.rotation.x=-Math.PI/2; b.position.set(0,0.045,z); shore.add(b);
 }
 
 // ===== 環境オブジェクト(琵琶湖・鳥人間コンテスト風) =====
 // 発進プラットフォーム(常設, シミュ用とは別の景観要素)。機体の胴体下に来るよう配置
 const dock=new THREE.Group();
-const deck=new THREE.Mesh(new THREE.BoxGeometry(9,0.4,8),new THREE.MeshPhongMaterial({color:0xb8a888}));
-deck.position.set(0,10,2); dock.add(deck);                 // デッキ天面 y=10.2、機体胴体下(z=-2〜6)
-for(const dx of [-4,4])for(const dz of [-1.5,5.5]){ // 支柱
+// 機体全体(z≈0〜7.5)を支える平らな発進台。前縁(z=-4)が水上へ張り出し、後端(z=8)が会場岸に接する
+const deck=new THREE.Mesh(new THREE.BoxGeometry(9,0.4,12),new THREE.MeshPhongMaterial({color:0xb8a888}));
+deck.position.set(0,10,2); dock.add(deck);                 // デッキ天面 y=10.2、z=-4〜8
+for(const dx of [-4,4])for(const dz of [-3,1,5]){ // 支柱(水中へ)
   const leg=new THREE.Mesh(new THREE.BoxGeometry(0.4,10,0.4),new THREE.MeshPhongMaterial({color:0x6b5d49}));
   leg.position.set(dx,5,dz); dock.add(leg);
 }
-const ramp=new THREE.Mesh(new THREE.BoxGeometry(7,0.3,4),new THREE.MeshPhongMaterial({color:0xc8b890}));
-ramp.position.set(0,9.4,8); ramp.rotation.x=0.16; dock.add(ramp);   // 後方(機尾側)へ下るランプ
 // 発進ライン(デッキ前縁=機首側の白線)
 const startLine=new THREE.Mesh(new THREE.PlaneGeometry(9,0.5),new THREE.MeshBasicMaterial({color:0xffffff}));
-startLine.rotation.x=-Math.PI/2; startLine.position.set(0,10.21,-1.6); dock.add(startLine);
+startLine.rotation.x=-Math.PI/2; startLine.position.set(0,10.21,-3.6); dock.add(startLine);
 envGroup.add(dock);
 
-// 計測ブイ(常設の距離標識: 100m毎, 1kmごとに赤・大)
+// ===== マラソンコースのパイロン(北/南・PFから約11km)とブイ =====
+const PYLON_DIST=11000;
+// 北パイロンはコース正面(-z)、南パイロンは南西へ分岐。どちらもPFから約11km
+const NORTH_PYLON=[0,-PYLON_DIST], SOUTH_PYLON=[-6300,-9020];
+function makePylon(x,z,col,name){
+  const g=new THREE.Group();
+  const pole=new THREE.Mesh(new THREE.CylinderGeometry(2.5,4,90,8),new THREE.MeshPhongMaterial({color:0xffffff}));
+  pole.position.y=45; g.add(pole);
+  const ball=new THREE.Mesh(new THREE.SphereGeometry(16,14,12),new THREE.MeshPhongMaterial({color:col,emissive:col,emissiveIntensity:0.4}));
+  ball.position.y=98; g.add(ball);
+  // 旋回円(パイロンを示すリング)
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(60,1.5,6,40),new THREE.MeshBasicMaterial({color:col}));
+  ring.rotation.x=-Math.PI/2; ring.position.y=0.5; g.add(ring);
+  const lb=label(name,"#"+col.toString(16).padStart(6,"0")); lb.scale.set(120,60,1); lb.position.y=140; g.add(lb);
+  g.position.set(x,0,z); return g;
+}
+// 計測ブイ: 各パイロンへ伸びるルート沿いに左右配置(先端にパイロン)。100m刻み(〜2km)→500m刻み
 const buoyGrp=new THREE.Group();
-for(let d=100;d<=2000;d+=100){
-  const km=d%1000===0, big=d%500===0;
-  const r=km?1.5:big?1.0:0.55;
-  const mat=new THREE.MeshPhongMaterial({color:km?0xd9342b:0xe8a23b});
-  for(const sx of [14,-14]){
-    const b=new THREE.Mesh(new THREE.SphereGeometry(r,8,6),mat);
-    b.position.set(sx,r*0.5,-d); buoyGrp.add(b);
-    const pole=new THREE.Mesh(new THREE.CylinderGeometry(0.04,0.04,r*2.2,5),new THREE.MeshPhongMaterial({color:0xffffff}));
-    pole.position.set(sx,r*1.3,-d); buoyGrp.add(pole);
+function buoyLine(px,pz){
+  const len=Math.hypot(px,pz), ux=px/len, uz=pz/len, qx=-uz, qz=ux; // ux,uz=進行方向, qx,qz=直交
+  for(let d=100; d<len-150; d+=(d<2000?100:500)){
+    const km=Math.round(d)%1000===0, big=Math.round(d)%500===0;
+    const r=km?1.6:big?1.0:0.5;
+    const mat=new THREE.MeshPhongMaterial({color:km?0xd9342b:0xe8a23b});
+    for(const s of [1,-1]){
+      const bx=ux*d+qx*14*s, bz=uz*d+qz*14*s;
+      const b=new THREE.Mesh(new THREE.SphereGeometry(r,8,6),mat);
+      b.position.set(bx,r*0.5,bz); buoyGrp.add(b);
+      const pole=new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,r*2.2,5),new THREE.MeshPhongMaterial({color:0xffffff}));
+      pole.position.set(bx,r*1.3,bz); buoyGrp.add(pole);
+    }
   }
 }
+buoyLine(NORTH_PYLON[0],NORTH_PYLON[1]);
+buoyLine(SOUTH_PYLON[0],SOUTH_PYLON[1]);
 envGroup.add(buoyGrp);
+const pylonGrp=new THREE.Group();
+pylonGrp.add(makePylon(NORTH_PYLON[0],NORTH_PYLON[1],0xd9342b,"北"));   // 北パイロン(ブイ正面の先)
+pylonGrp.add(makePylon(SOUTH_PYLON[0],SOUTH_PYLON[1],0x2c6fd9,"南"));   // 南パイロン(分岐ルートの先)
+envGroup.add(pylonGrp);
 
 // 遠景の山並み(琵琶湖を囲む比良・比叡の山影)
 function mountain(px,pz,w,h,col){
@@ -526,36 +593,22 @@ function mountain(px,pz,w,h,col){
   return m;
 }
 const hills=new THREE.Group();
-// 琵琶湖を囲む山並み: 遠景(数km先)に環状配置。色は距離で霞ませる(大気遠近)
-// 西=比良山地(高く険しい)、東=伊吹/鈴鹿(なだらか)、奥=北の山々
+// 琵琶湖を囲む山並み: 湖の中心(コース中央)を囲んで環状配置。
+// 対岸(西=比良/北=湖北/南)は高く険しい、会場岸(東・+z側)は低い丘。色は遠近で霞ませる。
 function mountainRing(){
-  // 西岸(機体左, x負): 比良山地 — 高く連なる
-  for(let i=0;i<18;i++){
-    const dist=3200+Math.random()*1800;
-    const pz=300-i*420+Math.random()*200;       // コースに沿って南北に展開
-    const h=420+Math.random()*380;
-    const shade=0x6a8472+(i%3)*0x040404;
-    hills.add(mountain(-dist*0.5,pz,300+Math.random()*260,h,[0x73907c,0x5f7d6e,0x82998a][i%3]));
-  }
-  // 東岸(機体右, x正): 伊吹・鈴鹿 — ややなだらか・遠い
-  for(let i=0;i<16;i++){
-    const dist=3600+Math.random()*2000;
-    const pz=200-i*460+Math.random()*220;
-    const h=300+Math.random()*320;
-    hills.add(mountain(dist*0.5,pz,280+Math.random()*240,h,[0x7d9486,0x6b8779,0x8a9e91][i%3]));
-  }
-  // 奥(北, z負遠方): 湖北の山々 — 最遠・最も霞む
-  for(let i=0;i<14;i++){
-    const px=-2600+Math.random()*5200;
-    const pz=-5500-Math.random()*2500;
-    const h=380+Math.random()*420;
-    hills.add(mountain(px,pz,360+Math.random()*300,h,[0x8ba0a8,0x9aabb2,0x7f96a0][i%3]));
-  }
-  // 手前南(発進方向の対岸, z正遠方)
-  for(let i=0;i<8;i++){
-    const px=-1800+Math.random()*3600;
-    const pz=3000+Math.random()*1500;
-    hills.add(mountain(px,pz,300+Math.random()*240,260+Math.random()*240,[0x7a9088,0x6d8479][i%2]));
+  const cz=-5000;                                  // 湖の中心z(コース中央付近)
+  const N=56;
+  for(let i=0;i<N;i++){
+    const ang=i/N*Math.PI*2 + (Math.random()-0.5)*0.06;
+    const r=7000+Math.random()*2800;
+    const px=Math.sin(ang)*r;
+    const pz=cz+Math.cos(ang)*r;
+    // 会場岸(東岸=+z寄り)は低い丘・町。対岸は高い山。
+    const venueSide=pz>cz+r*0.45;
+    const h=venueSide?(150+Math.random()*150):(380+Math.random()*440);
+    const w=290+Math.random()*300;
+    const cols=venueSide?[0x88a08f,0x7a9486,0x93a89a]:[0x73907c,0x5f7d6e,0x82998a,0x8ba0a8,0x9aabb2];
+    hills.add(mountain(px,pz,w,h,cols[i%cols.length]));
   }
 }
 mountainRing();
@@ -572,7 +625,8 @@ function boat(px,pz,col){
   return g;
 }
 const boats=new THREE.Group();
-boats.add(boat(22,18,0xcc4433)); boats.add(boat(-20,30,0x3366aa));
+// すべて水上(z<8)。プラットフォーム脇〜コース沿いに配置
+boats.add(boat(22,-10,0xcc4433)); boats.add(boat(-20,-16,0x3366aa));
 boats.add(boat(30,-60,0xddaa33)); boats.add(boat(-26,-120,0x44aa77));
 boats.add(boat(40,-260,0xcc4433));
 envGroup.add(boats);
@@ -678,6 +732,28 @@ function loftWing(stations, f0, f1, closed){
   return g;
 }
 
+// 単一面(上 or 下)のプランク帯を張る: which="up"/"lo", コード割合 [f0,f1]
+function loftSkin(stations, f0, f1, which){
+  if(f1-f0<=1e-4) return null;
+  const arr=which==="up"?AF.up:AF.lo;
+  const prof=arr.filter(p=>p[0]>=f0-1e-6 && p[0]<=f1+1e-6);
+  const m=prof.length, n=stations.length;
+  if(m<2) return null;
+  const pos=[], idx=[];
+  for(let i=0;i<n;i++){
+    const s=stations[i];
+    for(let j=0;j<m;j++) pos.push(s.x, s.y0+prof[j][1]*s.chord, s.z0+prof[j][0]*s.chord);
+  }
+  for(let i=0;i<n-1;i++)for(let j=0;j<m-1;j++){
+    const a=i*m+j,b=a+1,c=a+m,d=c+1;
+    idx.push(a,c,b, b,c,d);
+  }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute("position",new THREE.Float32BufferAttribute(pos,3));
+  g.setIndex(idx); g.computeVertexNormals();
+  return g;
+}
+
 let bendFn=null;
 const bend=(y)=>bendFn?bendFn(Math.abs(y)):0;
 let flexReg=null, flexN=0;
@@ -736,8 +812,12 @@ function buildAircraft(){
     const stn=wingStations(st,side);
     // フィルム全面
     wg.add(new THREE.Mesh(loftWing(stn,0,1,true), MAT.film));
-    // プランク(前縁〜plankRatio%)
-    wg.add(new THREE.Mesh(loftWing(stn,0,st.plankRatio/100,false), MAT.plank));
+    // プランク(上下面で範囲を独立指定)
+    const addSkin=(f0,f1,which)=>{const g=loftSkin(stn,f0,f1,which);if(g)wg.add(new THREE.Mesh(g,MAT.plank));};
+    addSkin(0,st.plankTop/100,"up");                       // 上面 前縁プランク
+    addSkin(0,st.plankBot/100,"lo");                       // 下面 前縁プランク
+    if((st.plankRearTop||0)>0)addSkin(1-st.plankRearTop/100,1,"up"); // 上面 後縁プランク
+    if((st.plankRearBot||0)>0)addSkin(1-st.plankRearBot/100,1,"lo"); // 下面 後縁プランク
     // エルロン
     if(st.mode!=="none"){
       const yIn=half*(1-st.ailSpanFrac);
@@ -839,18 +919,64 @@ function buildAircraft(){
       mkWheel(0,seat-0.55,0.13);              // 前輪
       mkWheel(0.55,seat+0.45,0.15);           // 主輪(左右)
       mkWheel(-0.55,seat+0.45,0.15);
+    } else if(st.gear==="tandem"){
+      mkWheel(0,seat-0.55,0.14);             // 前輪(前縦材の真下)
+      mkWheel(0,seat+0.55,0.15);             // 後輪(後縦材の真下)
     } else { // mono: 単輪+尾輪
       mkWheel(0,seat+0.05,0.16);              // 主輪
       mkWheel(0,an.fusLen-0.3,0.07);          // 尾輪
     }
   }
-  // テールブーム(座席後方→尾翼)
-  const boom=new THREE.Mesh(new THREE.CylinderGeometry(0.045,0.03,1,10), MAT.frame);
-  const b0=new THREE.Vector3(0,1.5,seat+1.2), b1=new THREE.Vector3(0,hBoom,an.fusLen);
-  const dir=b1.clone().sub(b0);
-  boom.scale.y=dir.length(); boom.position.copy(b0.clone().add(b1).multiplyScalar(0.5));
-  boom.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), dir.clone().normalize());
-  A.add(boom);
+  // ---- パイロット部トラス & テールビーム ----
+  // (左翼端から見た側面: 箱型トラスにパイロットが収まり、上を長いテールビームが貫く)
+  // 2点間にテーパー丸棒を渡すヘルパー
+  const strut=(p,q,r0,r1,mat)=>{
+    const d=q.clone().sub(p), len=d.length();
+    if(len<1e-4)return;
+    const c=new THREE.Mesh(new THREE.CylinderGeometry(r1,r0,len,8), mat||MAT.frame);
+    c.position.copy(p.clone().add(q).multiplyScalar(0.5));
+    c.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), d.clone().normalize());
+    A.add(c);
+  };
+  // コックピット枠(側面=箱+筋交い)。前後輪の真上に縦材を立てる
+  const zF=seat-0.55, zR=seat+0.55;     // 枠の前後位置(前後輪に対応)
+  const yT=hBoom, yB=0.36;              // 枠の上下(上端=テールビーム高さ)
+  const FT=new THREE.Vector3(0,yT,zF), FB=new THREE.Vector3(0,yB,zF); // 前 上/下
+  const RT=new THREE.Vector3(0,yT,zR), RB=new THREE.Vector3(0,yB,zR); // 後 上/下
+  strut(FB,FT,0.026,0.026);   // 前縦材
+  strut(RB,RT,0.026,0.026);   // 後縦材
+  strut(FB,RB,0.022,0.022);   // 下材(下ロンジロン)
+  strut(FB,RT,0.020,0.020);   // 筋交い(対角ブレース)
+  // テールビーム: 枠前上 → 尾端を一直線に貫く最長部材
+  const tailEnd=new THREE.Vector3(0, hBoom, an.fusLen);
+  strut(FT, tailEnd, 0.05, 0.026);   // 根元太→先端細
+  // 主翼主桁(メインビーム)の付け根。テールビーム前端と接合する
+  const sparRoot=new THREE.Vector3(0, hWing+0.03, st.wingX+st.rootChord*0.3);
+  strut(FT, sparRoot, 0.032, 0.032);   // メインビーム⇔テールビーム接合材
+  strut(RT, sparRoot, 0.024, 0.024);   // 後方からの斜め支え(主翼マウントを三角で固定)
+  // 節点ガセット(主翼マウント / 前上 / 枠後上)
+  for(const nd of [FT,RT,sparRoot]){
+    const g=new THREE.Mesh(new THREE.SphereGeometry(0.05,12,10), MAT.spar);
+    g.position.copy(nd); A.add(g);
+  }
+  const b0=RT, b1=tailEnd;   // テールビーム翼の取付基準(片持ち区間)
+  // テールビーム翼
+  if(st.boomWing&&st.boomWing!=="none"){
+    const bwp=st.boomWingPos||0.5;
+    const bwZ=b0.z+(b1.z-b0.z)*bwp, bwY=b0.y+(b1.y-b0.y)*bwp;
+    const bwS=st.boomWingSpan||1.0, bwC=st.boomWingChord||0.3;
+    const bwMat=new THREE.MeshPhongMaterial({color:0xc8d8e8,side:THREE.DoubleSide});
+    const mkBoomWing=(side)=>{
+      const bwStn=[];
+      for(let i=0;i<=8;i++){
+        const t=i/8, y=t*bwS/2;
+        bwStn.push({x:side*y,chord:bwC*(1-0.35*t),y0:bwY+0.02,z0:bwZ});
+      }
+      A.add(new THREE.Mesh(loftWing(bwStn,0,1,true),bwMat));
+    };
+    if(st.boomWing==="L"||st.boomWing==="LR") mkBoomWing(1);
+    if(st.boomWing==="R"||st.boomWing==="LR") mkBoomWing(-1);
+  }
   // パイロット(姿勢別の体節をチューブで)
   const P=(z,y)=>new THREE.Vector3(0,y,z);
   let body;
@@ -861,19 +987,47 @@ function buildAircraft(){
   A.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(body),20,0.075,8), MAT.pilot));
   const head=new THREE.Mesh(new THREE.SphereGeometry(0.11,12,10), MAT.pilot);
   head.position.copy(body[0]).add(new THREE.Vector3(0,0.13,0.03)); A.add(head);
+  // フェアリング(コックピットカバー)
+  if(st.fairing){
+    const fairW=st.posture==="upright"?0.32:0.28, fairH=st.posture==="upright"?0.70:0.52;
+    const fairLen=st.posture==="recumbent"?1.6:1.3;
+    const fairMat=new THREE.MeshPhongMaterial({color:0xd0e4f0,transparent:true,opacity:0.38,side:THREE.DoubleSide});
+    const fg=new THREE.Group();
+    // 本体: 楕円球を引き延ばしてカプセル形に
+    const fairBody=new THREE.Mesh(new THREE.SphereGeometry(1,14,10), fairMat);
+    fairBody.scale.set(fairW,fairH,fairLen/2);
+    const midZ=body[2].z, midY=body[2].y+fairH*0.4;
+    fairBody.position.set(0,midY,midZ); fg.add(fairBody);
+    // 前縁スカート(空気取り入れ口)
+    const skirMat=new THREE.MeshPhongMaterial({color:0x8aabcc,transparent:true,opacity:0.55});
+    const skirt=new THREE.Mesh(new THREE.CylinderGeometry(fairW*0.65,fairW*0.8,0.08,12), skirMat);
+    skirt.rotation.x=Math.PI/2; skirt.position.set(0,midY-0.08,midZ-fairLen/2+0.04); fg.add(skirt);
+    A.add(fg);
+  }
   // クランク
   const crank=new THREE.Mesh(new THREE.TorusGeometry(0.16,0.02,8,20), MAT.spar);
   crank.rotation.y=Math.PI/2; crank.position.copy(body[4]); A.add(crank);
 
   // ---- プロペラと駆動 ----
-  const boomYAt=z=>{const u=Math.max(0,Math.min(1,(z-(seat+1.2))/(an.fusLen-(seat+1.2))));return 1.5+(hBoom-1.5)*u;};
-  const propH = st.config==="pylon"?hBoom+0.9 : st.config==="tractor"?1.3 : st.config==="midboom"?boomYAt(an.xProp) : hBoom;
+  // テールビームは y=hBoom の水平部材。ビーム上のプロペラは全て hBoom に合わせる(パイロンのみ上方)
+  const propH = st.config==="pylon"?hBoom+0.9 : hBoom;
   propGroup=new THREE.Group(); propGroup.position.set(0,propH,an.xProp);
   const hub=new THREE.Mesh(new THREE.SphereGeometry(0.07,10,8), MAT.spar); propGroup.add(hub);
-  for(const s of [1,-1]){
-    const bl=new THREE.Mesh(new THREE.BoxGeometry(0.09,st.propDia/2*0.96,0.018), MAT.prop);
-    bl.position.y=s*st.propDia/4; bl.rotation.y=s*0.25;
-    const tw=new THREE.Group(); tw.add(bl); propGroup.add(tw);
+  // プロペラ素材(バルサ=木目色 / CFRP=黒)
+  const propMat=st.propMat==="carbon"
+    ? new THREE.MeshPhongMaterial({color:0x2f3338,shininess:80,specular:0x888888})
+    : new THREE.MeshPhongMaterial({color:0xcdb280,shininess:12});
+  const NB=Math.max(1,Math.round(st.propBlades||2));   // ブレード枚数(1〜)
+  for(let i=0;i<NB;i++){
+    const bl=new THREE.Mesh(new THREE.BoxGeometry(0.09,st.propDia/2*0.96,0.018), propMat);
+    bl.position.y=st.propDia/4; bl.rotation.y=0.25;     // ピッチ捻り
+    const tw=new THREE.Group(); tw.add(bl);
+    tw.rotation.z=i*2*Math.PI/NB;                        // 円周に等間隔配置
+    propGroup.add(tw);
+  }
+  if(NB===1){ // 1枚ペラ: 反対側にカウンターウェイト
+    const cw=new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,0.13,8), MAT.spar);
+    cw.position.y=-st.propDia/6; const tw=new THREE.Group(); tw.add(cw); propGroup.add(tw);
   }
   // スピナー
   const spin=new THREE.Mesh(new THREE.ConeGeometry(0.07,0.22,10), MAT.frame);
@@ -884,6 +1038,11 @@ function buildAircraft(){
   if(st.config==="pylon"){
     const py=new THREE.Mesh(new THREE.CylinderGeometry(0.03,0.04,propH-hBoom,8), MAT.frame);
     py.position.set(0,(propH+hBoom)/2,an.xProp); A.add(py);
+  }
+  // 機首ブーム: テールビーム前端(FT)からプロペラ軸まで前方へ延長(牽引式)
+  if(st.config==="tractor"){
+    const noseEnd=new THREE.Vector3(0,propH,an.xProp);
+    strut(FT, noseEnd, 0.04, 0.028);
   }
   // 駆動系(クランク→プロペラ軸)
   const crankP=body[4].clone(), propP=new THREE.Vector3(0,propH,an.xProp);
@@ -918,6 +1077,8 @@ function buildAircraft(){
       let le=hLE, c=st.hChord;
       if(st.hShape==="taper"){le=hLE+st.hChord*0.25*ax; c=st.hChord*(1-0.4*ax);}
       else if(st.hShape==="ellipse"){const w=Math.sqrt(Math.max(0.05,1-ax*ax)); le=hLE+st.hChord*(1-w)/2; c=st.hChord*w;}
+      else if(st.hShape==="swept"){le=hLE+st.hChord*0.38*ax; c=st.hChord*(1-0.3*ax);}
+      else if(st.hShape==="delta"){le=hLE+st.hChord*0.55*ax; c=st.hChord*(1-0.65*ax);}
       stn.push({x:u*hHalf, chord:c, y0:hBoom+0.02-st.wingX*0, z0:le-st.wingX*0});
     }
     // loftWingはz0+x*chordで張る: 薄い対称翼型を使う
@@ -942,6 +1103,11 @@ function buildAircraft(){
     vsh.moveTo(-vc*0.2,0); vsh.lineTo(vc*0.55,vh); vsh.lineTo(vc*1.05,vh); vsh.lineTo(vc*0.8,0);
   } else if(st.vShape==="ellipse"){
     vsh.moveTo(0,0); vsh.quadraticCurveTo(0,vh,vc*0.5,vh); vsh.quadraticCurveTo(vc,vh,vc,0);
+  } else if(st.vShape==="delta"){
+    vsh.moveTo(0,0); vsh.lineTo(vc*0.4,vh); vsh.lineTo(vc*0.65,vh); vsh.lineTo(vc,0);
+  } else if(st.vShape==="dorsal"){
+    vsh.moveTo(-vc*0.1,0); vsh.quadraticCurveTo(vc*0.3,vh*0.5,vc*0.45,vh);
+    vsh.lineTo(vc*0.7,vh); vsh.quadraticCurveTo(vc*0.95,vh*0.4,vc*0.85,0);
   } else {
     vsh.moveTo(0,0); vsh.lineTo(0,vh); vsh.lineTo(vc,vh); vsh.lineTo(vc,0);
   }
@@ -1027,6 +1193,11 @@ function setFPV(on){
   if(!on){camera.up.set(0,1,0);}
   const b=document.getElementById("fpvBtn");
   if(b)b.className=on?"on":"";
+  // FPV解除時は自機を再表示(飛行中はsimTickが毎フレーム再設定)
+  if(aircraft&&!on)aircraft.visible=true;
+  // フェアリングオーバーレイ: FPV中かつフェアリングあり
+  const fo=document.getElementById("fairingOverlay");
+  if(fo)fo.classList.toggle("on", on&&!!st.fairing);
   // 飛行中でなければ静止機体に対してFPVを当てる
   if(on&&!fpvState)fpvState={x:0,y:1.0,z:0,gam:0,psi:0,phi:0};
   applyCam();
@@ -1123,11 +1294,9 @@ function setMode(mode){
   } else {
     designGroup.visible=false;
     envGroup.visible=true;
-    // 飛行モード: 機体をプラットフォーム上(デッキ天面)へ
-    if(aircraft){aircraft.position.set(0,10.2,0);aircraft.rotation.set(0,0,0);aircraft.visible=true;}
-    orbit.target.set(0,11,2.5);
-    orbit.theta=-0.5;orbit.phi=1.15;orbit.dist=Math.max(16,st.span*0.9);
-    applyCam();
+    // 飛行モード: 発進モードに応じた位置へ(プラットフォーム=デッキ / 滑走路=滑走路端)
+    if(aircraft)aircraft.visible=true;
+    placeForMode();
     // 設定パネルは閉じた状態で開始(左上⚙で開く)
     toggleSettings(false);
   }
@@ -1168,16 +1337,21 @@ const SECTIONS=[
     ["sweep","後退角",0,12,1," °"]],open:true},
   {key:"rib",title:"② リブ配置",tpls:["rib"],sliders:[["ribPitch","リブピッチ",0.12,0.4,0.01," m"]],
     note:()=>`リブ枚数: ${an?an.nRibs:""} 枚`},
-  {key:"plank",title:"③ プランク(外皮)",tpls:["plank"],sliders:[["plankRatio","プランク率(コード比)",10,70,5," %"]]},
+  {key:"plank",title:"③ プランク(外皮)",tpls:["plank"],sliders:[
+    ["plankTop","上面 前縁プランク率",0,70,5," %"],
+    ["plankBot","下面 前縁プランク率",0,70,5," %"],
+    ["plankRearTop","上面 後縁プランク率",0,40,5," %"],
+    ["plankRearBot","下面 後縁プランク率",0,40,5," %"]]},
   {key:"ail",title:"④ エルロン",tpls:["ail"],sliders:[
     ["ailSpanFrac","エルロンスパン(半翼比)",0.1,0.4,0.01,"",()=>st.mode!=="none",100,"%"],
     ["ailChordFrac","エルロンコード比",0.15,0.4,0.01,"",()=>st.mode!=="none",100,"%"]]},
-  {key:"prop",title:"⑤ プロペラ配置",tpls:["prop"],sliders:[
+  {key:"prop",title:"⑤ プロペラ配置・素材",tpls:["prop","propMat"],sliders:[
     ["propDia","プロペラ直径",2.0,3.8,0.1," m"],
-    ["propBlades","ブレード枚数",2,4,1," 枚"]]},
-  {key:"pilot",title:"⑥ パイロット座席・駆動",tpls:["pilot","drive","gear"],sliders:[
+    ["propBlades","ブレード枚数",1,4,1," 枚"]]},
+  {key:"pilot",title:"⑥ パイロット座席・駆動",tpls:["pilot","drive","gear","fairing"],sliders:[
     ["seatX","座席位置(機首から)",0.2,2.5,0.05," m"],["pilotW","パイロット体重",45,80,1," kg"],
-    ["powerMax","持続出力(目安)",160,360,5," W"]],
+    ["powerMax","持続出力(目安)",160,360,5," W"],
+    ["driveEffPct","駆動伝達効率",85,99,1," %"]],
     note:()=>`駆動距離: ${an?an.driveDist.toFixed(2):""} m(長いほど重量・損失増)`},
   {key:"spar",title:"⑦ CFRP主桁",tpls:["spar"],sliders:[
     ["segments","分割数",1,6,1," 本"],["rootDia","翼根径",70,150,5," mm"],["tipDia","翼端径",30,150,5," mm"],
@@ -1190,6 +1364,10 @@ const SECTIONS=[
   {key:"vt",title:"⑨ 垂直尾翼・ラダー",tpls:["vt","rud"],sliders:[
     ["vHeight","垂直尾翼高さ",0.8,2.2,0.05," m"],["vChord","垂直尾翼コード",0.35,0.9,0.05," m"],
     ["rudRatio","ラダー舵面比",0.2,0.5,0.05,"",()=>st.rudRatio<1,100,"%"]]},
+  {key:"boom",title:"⑩ テールビーム翼",tpls:["boomWing"],sliders:[
+    ["boomWingSpan","翼幅(片側)",0.3,2.0,0.1," m",()=>st.boomWing!=="none"],
+    ["boomWingChord","翼弦長",0.15,0.6,0.05," m",()=>st.boomWing!=="none"],
+    ["boomWingPos","ビーム上の取付位置(0=翼付近 / 1=尾翼付近)",0,1,0.05,"",()=>st.boomWing!=="none"]]},
 ];
 
 const ctrl=document.getElementById("ctrl");
@@ -1255,6 +1433,7 @@ function partTarget(secKey){
     case "spar":  return {t:new THREE.Vector3(half*0.4,0.1,a.wingLE+a.MAC*0.3), dist:Math.max(12,st.span*0.5)};
     case "ht":    return {t:new THREE.Vector3(0,0.5,a.xHT), dist:5.5};
     case "vt":    return {t:new THREE.Vector3(0,0.9,a.xVT), dist:5.5};
+    case "boom":  return {t:new THREE.Vector3(0,0.8,(st.seatX+1.2+a.fusLen)*0.5), dist:6};
     default:      return {t:new THREE.Vector3(0,0.5,a.wingLE+a.MAC*0.4), dist:Math.max(16,st.span*0.8)};
   }
 }
@@ -1323,6 +1502,7 @@ function aeroConsts(){
   // プロペラ効率: 配置 + ブレード枚数(2枚が最高効率、多翼は推力密度↑だが効率微減)
   let propEff=st.config==="pylon"?0.87:st.config==="tractor"?0.82:0.8;
   propEff-=(st.propBlades-2)*0.015;
+  propEff+=st.propMat==="carbon"?0.012:0;     // CFRPは剛性で形状を保持→効率微増
   propEff=Math.max(0.7,propEff);
   // 最大揚力係数: 翼型固有 + 捻り下げで実効的に若干低下(翼端が早く頭打ち)
   const CLmaxWing=af.clmax-Math.min(0.12,st.washout*0.02);
@@ -1436,7 +1616,10 @@ function computeLoads(n){
   const th=[0],de=[0];
   for(let i=1;i<=N;i++){th[i]=th[i-1]+(M[i-1]/EI[i-1]+M[i]/EI[i])/2*dy;de[i]=de[i-1]+(th[i-1]+th[i])/2*dy;}
   const Mallow=0.0033*Math.pow(st.rootDia,3);
-  return {ys,Lp,LpE,M,defl:de,tip:de[N],Mroot:M[0],Mallow,SF:Mallow/M[0]};
+  // たわみによる翼端の上反角: 翼根の据付上反角 + 曲げによる先端傾斜
+  const baseDih=st.jig==="flat"?0:st.dihedral;          // 据付(ジグ)上反角 deg
+  const bendDih=th[N]*180/Math.PI;                      // たわみによる先端傾斜 deg
+  return {ys,Lp,LpE,M,defl:de,tip:de[N],Mroot:M[0],Mallow,SF:Mallow/M[0],baseDih,bendDih,dihEff:baseDih+bendDih};
 }
 
 // ---- 速度/ドラッグポーラー ----
@@ -1473,7 +1656,8 @@ function gustCalc(){
 }
 
 // ---- 飛行シミュレーション ----
-const simPrm={P:270,V0:7.0,wind:0,xwind:0,wdir:0,wspd:0,gust:1.0,CLmax:1.4,hTgt:2.0,speed:3,mode:"platform",auto:false,wcap:20,sens:1.0,hold:false,temp:20,turb:0.3,view:"chase",tod:7.0,summer:true,thermal:0.0,ghost:true,_t:0};
+const RWY_START=2000;   // 滑走路発進位置(後端側)。滑走路は z=14..2014(2000m)
+const simPrm={P:270,V0:7.0,wind:0,xwind:0,wdir:0,wspd:0,gust:1.0,CLmax:1.4,hTgt:2.0,speed:3,mode:"platform",auto:false,wcap:20,sens:1.0,hold:false,temp:20,turb:0.3,view:"chase",tod:7.0,summer:true,thermal:0.0,ghost:true,pjit:false,_t:0};
 // 風向(吹いてくる方角: 0°=正面=向かい風, 90°=右から, 180°=追い風)+風速 → コース成分へ分解
 function applyWindVec(){
   const th=simPrm.wdir*Math.PI/180;
@@ -1588,25 +1772,26 @@ function aeroPack(){
   const A=Math.PI*Math.pow(st.propDia/2,2);
   const Vdesign=a.V;                                    // プロペラ設計点(巡航速度)
   const chordRef=a.MAC;                                 // 代表コード長(レイノルズ数用)
+  const driveEff=Math.max(0.5,Math.min(1,(st.driveEffPct!=null?st.driveEffPct:(st.drive==="shaft"?93:97))/100)); // 駆動伝達効率(設定値)
   // 最小パワー速度(最も省エネに巡航できる速度)= オートの目標速度
   let Vmp=Vs*1.1, Pmin=1e9;
   for(let v=Vs*1.02;v<=14;v+=0.1){
     const CL=2*W/(rho*v*v*a.S);
     if(CL>CLmax)continue;
     const CD=CD0+CL*CL/(Math.PI*a.AR*e);
-    const P=0.5*rho*v*v*v*a.S*CD/propEff;
+    const P=0.5*rho*v*v*v*a.S*CD/(propEff*driveEff);    // 伝達損失込みの必要パイロット出力
     if(P<Pmin){Pmin=P;Vmp=v;}
   }
   const nFail=computeLoads(1).SF;                       // 桁折損する荷重倍数(Schrenk曲げ基準)
   const VNE=Math.max(16,1.9*a.V);                       // 超過禁止速度(フラッター/フィルム破壊)。発進ダイブ(〜13m/s)は許容
   const sg=simPrm.sens;                                  // 操舵感度(0.3〜1.5)
-  const ailRate=(st.mode==="large"?7:st.mode==="small"?4:0)*Math.PI/180*sg; // ロール角速度/full
+  const ailRate=(st.mode==="allmove"?9:st.mode==="large"?7:st.mode==="small"?4:0)*Math.PI/180*sg; // ロール角速度/full
   const rudYaw=2.5*Math.PI/180*sg, rudRoll=1.2*Math.PI/180*sg; // ラダー直接ヨー+上反角効果ロール
   const elevAuth=0.65*sg;                                // エレベーター舵効き
   const hasGear=st.gear&&st.gear!=="none";
-  const gearCD=hasGear?(st.gear==="tri"?0.0016:0.0009):0; // 着陸装置の形状抗力
+  const gearCD=hasGear?(st.gear==="tri"?0.0016:st.gear==="tandem"?0.0007:0.0009):0; // 着陸装置の形状抗力
   const CP=st.powerMax;                                 // パイロット持続出力(⑥の設定)
-  return {a,CD0:CD0+gearCD,e,propEff,rho,g,W,m:a.W,S:a.S,CLmax,Vs,Vt,A,AR:a.AR,nFail,VNE,ailRate,rudYaw,rudRoll,elevAuth,hasGear,CP,Vdesign,chordRef,Vmp,Pmin};
+  return {a,CD0:CD0+gearCD,e,propEff,driveEff,rho,g,W,m:a.W,S:a.S,CLmax,Vs,Vt,A,AR:a.AR,nFail,VNE,ailRate,rudYaw,rudRoll,elevAuth,hasGear,CP,Vdesign,chordRef,Vmp,Pmin};
 }
 
 // 1物理ステップ(dt秒)。操舵L.eと出力simPrm.Pをリアルタイム反映
@@ -1639,8 +1824,11 @@ function stepSim(L,dt){
   // ---- 出力決定: 手動=スライダー / オート=体力モデル(CP+W'bal)で高度維持 ----
   let P;
   if(L.auto){
-    const CPe=c.CP*(1-0.08*L.t/3600);                 // 長時間疲労: -8%/h
-    const Pinst=L.wbal>0?CPe+Math.min(300,L.wbal/6):CPe; // 無酸素バーストの上限
+    // 持続出力CPe: 長時間疲労(-18%/h)に加え、無酸素容量W'が枯渇すると更に低下
+    const wcap=simPrm.wcap*1000;
+    const wfrac=Math.max(0,Math.min(1,L.wbal/wcap));
+    const CPe=c.CP*(1-0.18*L.t/3600)*(0.88+0.12*wfrac);
+    const Pinst=L.wbal>0?CPe+Math.min(220,L.wbal/9):CPe; // 無酸素バーストの上限(W'残量比例)
     const Vtgt=c.Vmp;
     // ソフト目標高度: 発進高度から目標へゆっくり移行(急降下/急上昇を防ぐ)
     if(L.softHTgt==null)L.softHTgt=L.h;               // 初回は現在高度から開始
@@ -1654,16 +1842,31 @@ function stepSim(L,dt){
     P=Math.max(30,Math.min(Pinst, Ptarget));
     if(L.ground)P=Pinst;                              // 滑走中は全力
     if(P>CPe)L.wbal=Math.max(0,L.wbal-(P-CPe)*dt);    // W'消費
-    else L.wbal=Math.min(simPrm.wcap*1000,L.wbal+(CPe-P)*0.35*dt); // 回復
+    else L.wbal=Math.min(wcap,L.wbal+(CPe-P)*0.30*dt); // 回復(上限=W'容量)
+    L.wbal=Math.max(0,Math.min(wcap,L.wbal));         // 念のためクランプ
     L.Pnow=P;
     L.autoVtgt=Vtgt;
-  } else { P=simPrm.P; L.Pnow=P; }
+  } else {
+    // 手動: 出力にランダムなゆらぎ(±10W, トグルON時)。有色ノイズで滑らかに
+    P=simPrm.P;
+    if(simPrm.pjit){
+      L._pj=(L._pj||0)*0.9+(Math.random()-0.5)*6;
+      P=Math.max(0,simPrm.P+Math.max(-10,Math.min(10,L._pj)));
+    }
+    L.Pnow=P;
+  }
+  // 駆動伝達後の軸出力(チェーン/シャフトの伝達効率を反映)
+  const Pshaft=Math.max(0,P)*c.driveEff;
   // プロペラ効率は設計点(巡航)で最大、低速・高速で低下(釣鐘特性)
   const jr=L.V/Math.max(c.Vdesign,3);
   const etaP=c.propEff*Math.max(0.45,1-0.55*Math.pow(jr-1,2));
-  const Tmax=0.8*Math.cbrt(2*c.rho*c.A*Math.pow(P*etaP,2));
-  const T=Math.min(P*etaP/Math.max(L.V,1.5),Tmax);
+  const Tmax=0.8*Math.cbrt(2*c.rho*c.A*Math.pow(Pshaft*etaP,2));
+  const T=Math.min(Pshaft*etaP/Math.max(L.V,1.5),Tmax);
   L.etaP=etaP;
+  // プロペラ回転数: 出力係数 P=Cp·ρ·n³·D⁵ を逆算(n=rev/s)
+  const Cp=0.10;
+  const nps=Math.cbrt(Math.max(0,Pshaft)/(Cp*c.rho*Math.pow(st.propDia,5)+1e-6));
+  L.nps=nps; L.rpm=nps*60;
   if(L.ground){
     const CLg=0.8+0.3*Math.max(0,L.e);            // 引き起こしで迎角増
     const lift=q*c.S*CLg;
@@ -1756,6 +1959,22 @@ function stepSim(L,dt){
 }
 function simSample(L){return {t:+L.t.toFixed(2),x:L.x,h:L.h,V:L.V,gam:L.gam,n:L.n,yl:L.yl,phi:L.phi,path:L.path,psi:L.psi};}
 
+// 発進モードに応じて(シミュ非実行時に)機体を所定位置へ配置
+function placeForMode(){
+  if(simPlay||!aircraft||appMode!=="flight")return;
+  if(simPrm.mode==="runway"){
+    aircraft.position.set(0,0,RWY_START);
+    aircraft.rotation.set(0,0,0);
+    orbit.target.set(0,2,RWY_START);
+    orbit.theta=-0.5;orbit.phi=1.15;orbit.dist=Math.max(16,st.span*0.9);
+  } else {
+    aircraft.position.set(0,10.2,0);
+    aircraft.rotation.set(0,0,0);
+    orbit.target.set(0,11,2.5);
+    orbit.theta=-0.5;orbit.phi=1.15;orbit.dist=Math.max(16,st.span*0.9);
+  }
+  applyCam();
+}
 function startSim(){
   stopSim();
   // 夏の琵琶湖モード: 毎フライト天候を引き直す(ランダム要素)
@@ -1764,19 +1983,18 @@ function startSim(){
   const runway=simPrm.mode==="runway";
   const noGearRunway=runway&&!c.hasGear;
   const L={c,ground:runway&&c.hasGear,
-    V:runway?Math.max(0.2,0.5-simPrm.wind):Math.max(0.5,simPrm.V0-simPrm.wind),
+    V:runway?Math.max(0.2,0.5-simPrm.wind):Math.max(0,simPrm.V0-simPrm.wind),
     gam:0,h:runway?0:10,x:0,t:0,acc:0,e:0,eTgt:0,n:runway?0:1,
     phi:0,psi:0,yl:0,path:0,ail:0,ailTgt:0,rud:0,rudTgt:0,broken:null,
     auto:simPrm.auto,wbal:simPrm.wcap*1000,Pnow:simPrm.auto?st.powerMax:simPrm.P,
     groundRoll:null,overrun:false,splash:false,done:false,lastSample:0,frame:0};
   if(noGearRunway){L.done=true;L.overrun=true;L.nogear=true;}
   simRes={out:[simSample(L)],Vs:c.Vs,runway,dist:0,time:0,splash:false,overrun:false,groundRoll:null};
-  const z0=runway?490:0, h0=runway?0:10.2;
+  const z0=runway?RWY_START:0, h0=runway?0:10.2;
   platform=new THREE.Group();
-  // プラットフォーム発進では常設dock(z=2付近・天面y=10.2)をそのまま発進台に使う。
-  // ここでは追加の台は作らず、コースブイのみ配置する。
-  // コースブイ: 100m刻み(〜2km)+500m刻み(〜10km)、1kmごとに赤 ※湖上のみ
-  for(let d=100;d<=10000;d+=100){
+  // プラットフォーム発進では常設dock(天面y=10.2)と常設ルートブイ(→パイロン)をそのまま使う。
+  // 滑走路モードのみ、離陸後の湖上に距離ブイを追加配置(常設ルートとは別軸のため)
+  if(runway)for(let d=100;d<=10000;d+=100){
     if(d%500!==0&&d>2000)continue;
     const zb=z0-d;
     if(zb>-15)continue;
@@ -1902,7 +2120,7 @@ function setCtrl(ax,v){
   highlightCtrl(ax,v);
 }
 // 操舵入力に応じて操縦パッドのボタンを光らせる(キー操作でも反応)
-const CTRL_BTN={"e:1":["elUp","coElUp"],"e:-1":["elDn","coElDn"],"ail:-1":["alL","coAlL"],"ail:1":["alR","coAlR"],"rud:-1":["rdL","coRdL"],"rud:1":["rdR","coRdR"]};
+const CTRL_BTN={"e:1":["elUp","coElUp"],"e:-1":["elDn","coElDn"],"ail:-1":["alL","coRdL"],"ail:1":["alR","coRdR"],"rud:-1":["rdL","coAlL"],"rud:1":["rdR","coAlR"]};
 function highlightCtrl(ax,v){
   for(const dir of [1,-1]){
     const ids=CTRL_BTN[ax+":"+dir];if(!ids)continue;
@@ -1940,8 +2158,10 @@ function simTick(){
   if(aircraft){
     aircraft.position.set(L.yl,L.h,zw);
     aircraft.rotation.set(L.gam,-L.psi,L.phi);
-    if(L.done&&L.splash&&!L.broken)aircraft.visible=(L.frame%6<4);
-    aircraft.visible=aircraft.visible&&!fpvMode; // FPVでは自機を隠す
+    // 可視判定は毎フレーム新規に決める(前値とANDしない: FPV解除後に戻らないバグ防止)
+    let vis=!fpvMode;
+    if(L.done&&L.splash&&!L.broken)vis=vis&&(L.frame%6<4);
+    aircraft.visible=vis;
   }
   fpvState={x:L.yl,y:L.h,z:zw,gam:L.gam,psi:L.psi,phi:L.phi};
   // ゴースト機: 自機と同じ進行距離の地点を表示(競走風)
@@ -1999,7 +2219,7 @@ function updateSimReadout(L){
   const nF=lv?lv.c.nFail:null;
   const nv=L&&L.n!=null?L.n:null;
   const nCol=nv!=null&&nF?(nv>0.85*nF?"var(--bad)":nv>0.6*nF?"var(--warn)":"inherit"):"inherit";
-  const pTxt=lv?(lv.auto?`P ${lv.Pnow.toFixed(0)}W <span style="color:${lv.wbal<3000?"var(--bad)":"inherit"}">W' ${(lv.wbal/1000).toFixed(1)}kJ</span>`:`P ${simPrm.P}W`):"";
+  const pTxt=lv?(lv.auto?`P ${lv.Pnow.toFixed(0)}W <span style="color:${lv.wbal<3000?"var(--bad)":"inherit"}">W' ${(lv.wbal/1000).toFixed(1)}kJ</span>`:`P ${(lv.Pnow!=null?lv.Pnow:simPrm.P).toFixed(0)}W`):"";
   const elev=flying?`<span>舵 ${ev>0.05?"▲":ev<-0.05?"▼":"—"}${Math.abs(ev*100).toFixed(0)}%</span><span>${pTxt}</span>`+
     (nv!=null?`<span style="color:${nCol}">n ${nv.toFixed(2)}${nF?"/"+nF.toFixed(2):""}</span>`:"")+
     (lv?`<span>バンク ${(lv.phi*180/Math.PI).toFixed(0)}°</span><span>横 ${lv.yl>=0?"+":""}${lv.yl.toFixed(0)}m</span>`:""):"";
@@ -2012,9 +2232,9 @@ function updateSimReadout(L){
     fin+=simRes.offcourse
       ?`<b style="color:var(--warn)">コース逸脱で計測終了(直線距離 ${simRes.dist.toFixed(0)} m)</b>`
       :simRes.nogear
-      ?`<b style="color:var(--bad)">着陸装置がないため滑走できません(⑥で単輪/三輪式を選択)</b>`
+      ?`<b style="color:var(--bad)">着陸装置がないため滑走できません(⑥で前後2輪を選択)</b>`
       :simRes.overrun
-      ?`<b style="color:var(--bad)">滑走480m以内に離陸速度へ届きません(到達 ${simRes.dist.toFixed(0)} m)</b>`
+      ?`<b style="color:var(--bad)">滑走路2000m以内に離陸速度へ届きません(到達 ${simRes.dist.toFixed(0)} m)</b>`
       :simRes.splash
       ?`<b style="color:var(--bad)">着水! 飛距離 ${simRes.dist.toFixed(0)} m</b>`
       :simRes.dist>0
@@ -2040,7 +2260,7 @@ function updateFlightData(L,cur,flying,waiting,stall,fin){
     if(sp)sp.classList.toggle("on",!fpvMode);
     const nF=lv.c.nFail, nv=cur.n!=null?cur.n:1;
     const vCls=stall?"bad":"";
-    const P=lv.auto?lv.Pnow:simPrm.P;
+    const P=lv.Pnow!=null?lv.Pnow:simPrm.P;   // 手動の出力ゆらぎも反映
     // 対地速度 = 対気速度の水平成分 + 追い風成分
     const vAir=cur.V, vGround=vAir*Math.cos(cur.gam||0)+simPrm.wind;
     // 風向(吹いてくる方向)を矢印で
@@ -2052,6 +2272,7 @@ function updateFlightData(L,cur,flying,waiting,stall,fin){
       <span class="fd-item ${vCls}">対気速度<b>${vAir.toFixed(1)} m/s</b></span>
       <span class="fd-item">対地速度<b>${vGround.toFixed(1)} m/s</b></span>
       <span class="fd-item">出力<b>${P.toFixed(0)} W</b></span>
+      <span class="fd-item">回転<b>${(lv.rpm||0).toFixed(0)} rpm</b></span>
       <span class="fd-item">高度<b>${cur.h.toFixed(1)} m</b></span>
       <span class="fd-item">荷重<b class="${nv>0.85*nF?'':''}">${nv.toFixed(2)}</b></span>
       <span class="fd-item fd-wind"><span class="fd-windarrow">${wArrow}</span><span>wind ${simPrm.wspd.toFixed(1)}</span></span>
@@ -2079,6 +2300,35 @@ function drawSidePanels(){
   const av=document.getElementById("spAltVal"), sv=document.getElementById("spSpdVal");
   if(av)av.textContent=cur.h.toFixed(1)+" m";
   if(sv)sv.textContent=cur.V.toFixed(1)+" m/s";
+  drawGpsMap(cur);
+}
+// 上空からのGPSコースマップ(プラットフォーム・北/南パイロン・自機)
+function drawGpsMap(cur){
+  const cv=document.getElementById("gpsMap");if(!cv)return;
+  const dpr=Math.min(window.devicePixelRatio||1,2);
+  const w=cv.clientWidth||120,h=cv.clientHeight||120;
+  cv.width=w*dpr;cv.height=h*dpr;
+  const c=cv.getContext("2d");c.setTransform(dpr,0,0,dpr,0,0);
+  c.clearRect(0,0,w,h);
+  c.fillStyle="rgba(40,70,100,0.4)";c.fillRect(0,0,w,h);   // 湖面
+  const pf={x:0.80*w,y:0.5*h}, north={x:0.26*w,y:0.16*h}, south={x:0.32*w,y:0.86*h};
+  c.strokeStyle="rgba(255,255,255,0.4)";c.setLineDash([4,3]);c.lineWidth=1.2;
+  c.beginPath();c.moveTo(pf.x,pf.y);c.lineTo(north.x,north.y);c.stroke();
+  c.beginPath();c.moveTo(pf.x,pf.y);c.lineTo(south.x,south.y);c.stroke();
+  c.setLineDash([]);
+  const dot=(p,col,r)=>{c.fillStyle=col;c.beginPath();c.arc(p.x,p.y,r,0,7);c.fill();};
+  dot(pf,"#7CFC9A",5);dot(north,"#ff5a5a",5);dot(south,"#5aa0ff",5);
+  c.fillStyle="#cfe";c.font="9px system-ui";c.textAlign="center";
+  c.fillText("北",north.x,north.y-7);c.fillText("南",south.x,south.y+13);c.fillText("PF",pf.x+10,pf.y+3);
+  // 自機: 往路(PF→北パイロン)を進捗で配置 + 横ずれ(yl)
+  const dist=(cur&&cur.x)||0, frac=Math.max(0,Math.min(1,dist/PYLON_DIST));
+  const ax=pf.x+(north.x-pf.x)*frac, ay=pf.y+(north.y-pf.y)*frac;
+  const dx=north.x-pf.x, dy=north.y-pf.y, L=Math.hypot(dx,dy)||1;
+  const nx=-dy/L, ny=dx/L, off=Math.max(-16,Math.min(16,(cur&&cur.yl||0)*0.01));
+  c.fillStyle="#E8590C";c.beginPath();c.arc(ax+nx*off,ay+ny*off,4,0,7);c.fill();
+  c.strokeStyle="#fff";c.lineWidth=1;c.stroke();
+  const gv=document.getElementById("gpsVal");
+  if(gv)gv.textContent=(dist/1000).toFixed(1)+"km";
 }
 function drawMiniGraph(id,vals,color,yMin,refLine){
   const cv=document.getElementById(id);if(!cv||!vals.length)return;
@@ -2091,15 +2341,26 @@ function drawMiniGraph(id,vals,color,yMin,refLine){
   if(refLine!=null){lo=Math.min(lo,refLine);hi=Math.max(hi,refLine);}
   if(hi-lo<0.5)hi=lo+1;
   const pad=(hi-lo)*0.12;hi+=pad;lo-=pad;if(yMin!=null&&lo<yMin)lo=yMin;
-  const X=i=>4+i/(vals.length-1||1)*(w-8);
+  const gx=24;                                  // 左の目盛り領域
+  const X=i=>gx+i/(vals.length-1||1)*(w-gx-4);
   const Y=v=>h-6-(v-lo)/(hi-lo)*(h-12);
+  // y目盛り(3分割: グリッド線+数値)
+  c.font="9px ui-monospace,monospace";c.textBaseline="middle";c.textAlign="right";
+  for(let i=0;i<=3;i++){
+    const v=lo+(hi-lo)*i/3, yy=Y(v);
+    c.strokeStyle="rgba(255,255,255,0.12)";c.lineWidth=1;
+    c.beginPath();c.moveTo(gx,yy);c.lineTo(w-4,yy);c.stroke();
+    c.fillStyle="rgba(255,255,255,0.72)";
+    c.fillText(v.toFixed(Math.abs(v)<10?1:0), gx-2, Math.max(7,Math.min(h-5,yy)));
+  }
+  c.textBaseline="alphabetic";c.textAlign="left";
   // 軸
-  c.strokeStyle="rgba(255,255,255,0.25)";c.lineWidth=1;
-  c.beginPath();c.moveTo(4,h-6);c.lineTo(w-4,h-6);c.moveTo(4,6);c.lineTo(4,h-6);c.stroke();
+  c.strokeStyle="rgba(255,255,255,0.3)";c.lineWidth=1;
+  c.beginPath();c.moveTo(gx,h-6);c.lineTo(w-4,h-6);c.moveTo(gx,6);c.lineTo(gx,h-6);c.stroke();
   // 基準線(失速速度など)
   if(refLine!=null){
-    c.strokeStyle="rgba(255,90,90,0.55)";c.setLineDash([4,3]);
-    c.beginPath();c.moveTo(4,Y(refLine));c.lineTo(w-4,Y(refLine));c.stroke();c.setLineDash([]);
+    c.strokeStyle="rgba(255,90,90,0.6)";c.setLineDash([4,3]);
+    c.beginPath();c.moveTo(gx,Y(refLine));c.lineTo(w-4,Y(refLine));c.stroke();c.setLineDash([]);
   }
   // 折れ線
   c.strokeStyle=color;c.lineWidth=2;c.beginPath();
@@ -2189,7 +2450,7 @@ function drawHUD(L){
   const gFrac=Math.max(0,Math.min(1,n/nF));
   const gCol=n>0.85*nF?"#ff4d4d":n>0.6*nF?"#ffb020":"#7CFC9A";
   // --- 出力/体力ゲージ(左下) ---
-  const P=lv.auto?lv.Pnow:simPrm.P, pFrac=Math.max(0,Math.min(1,P/700));
+  const P=lv.Pnow!=null?lv.Pnow:simPrm.P, pFrac=Math.max(0,Math.min(1,P/700));
   const wbalFrac=lv.auto?Math.max(0,Math.min(1,lv.wbal/(simPrm.wcap*1000))):null;
   // --- 操舵インジケータ(下中央) ---
   const stickX=500,stickY=540,stickR=34;
@@ -2321,16 +2582,26 @@ function exportRibsSVG(){
     yOff+=top*c+8;
     const pts=AF.up.slice().reverse().concat(AF.lo);
     const path=pts.map((p,j)=>(j?"L":"M")+(10+p[0]*c).toFixed(1)+" "+(yOff-p[1]*c).toFixed(1)).join("")+"Z";
-    const m=afY(0.3),pm=afY(st.plankRatio/100);
-    const px=10+st.plankRatio/100*c;
+    const m=afY(0.3);
     svg+=`<path d="${path}" fill="none" stroke="#1B2A4A" stroke-width="0.4"/>`;
     svg+=`<circle cx="${(10+0.3*c).toFixed(1)}" cy="${(yOff-m.mid*c).toFixed(1)}" r="${(g.d/2).toFixed(1)}" fill="none" stroke="#E8590C" stroke-width="0.4"/>`;
-    svg+=`<line x1="${px.toFixed(1)}" y1="${(yOff-pm.yu*c-3).toFixed(1)}" x2="${px.toFixed(1)}" y2="${(yOff-pm.yl*c+3).toFixed(1)}" stroke="#2C5F9E" stroke-width="0.3" stroke-dasharray="2 2"/>`;
+    // プランク端マーク(上面=該当面〜中心線, 下面も同様。前縁=青, 後縁=緑)
+    const plankMark=(frac,which,col)=>{
+      if(frac<=0||frac>=1)return;
+      const x=10+frac*c, yy=afY(frac);
+      const y1=yOff-(which==="up"?yy.yu:yy.mid)*c, y2=yOff-(which==="up"?yy.mid:yy.lo)*c;
+      svg+=`<line x1="${x.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${col}" stroke-width="0.3" stroke-dasharray="2 2"/>`;
+    };
+    plankMark(st.plankTop/100,"up","#2C5F9E");
+    plankMark(st.plankBot/100,"lo","#2C5F9E");
+    if((st.plankRearTop||0)>0)plankMark(1-st.plankRearTop/100,"up","#1E7F4F");
+    if((st.plankRearBot||0)>0)plankMark(1-st.plankRearBot/100,"lo","#1E7F4F");
     svg+=`<text x="10" y="${(yOff+bot*c+9).toFixed(1)}" font-size="6" fill="#1B2A4A" font-family="monospace">R${g.no}: y=${g.y}m  c=${g.c}mm  桁孔φ${g.d}mm  ×${g.count}枚</text>`;
     yOff+=bot*c+24;
   }
   const Wm=maxW+10,Hm=yOff+8;
-  const doc=`<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${Wm}mm" height="${Hm}mm" viewBox="0 0 ${Wm} ${Hm}"><text x="10" y="10" font-size="5" fill="#46587A" font-family="monospace">リブ型紙(100%実寸で印刷) 翼幅${st.span}m プランク${st.plankRatio}% 桁孔は外径+2mmクリアランス</text>${svg}</svg>`;
+  const plankNote=`上面前縁${st.plankTop}%/下面前縁${st.plankBot}%`+(((st.plankRearTop||0)>0||(st.plankRearBot||0)>0)?` 後縁(上${st.plankRearTop||0}/下${st.plankRearBot||0}%)`:"");
+  const doc=`<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${Wm}mm" height="${Hm}mm" viewBox="0 0 ${Wm} ${Hm}"><text x="10" y="10" font-size="5" fill="#46587A" font-family="monospace">リブ型紙(100%実寸で印刷) 翼幅${st.span}m プランク${plankNote} 桁孔は外径+2mmクリアランス</text>${svg}</svg>`;
   const aEl=document.createElement("a");
   aEl.href=URL.createObjectURL(new Blob([doc],{type:"image/svg+xml"}));
   aEl.download="birdman_ribs.svg";aEl.click();
@@ -2384,18 +2655,19 @@ sim:{
           <button class="tbtn sec" id="simAuto">🤖 性能計測オート: OFF</button>
           <button class="tbtn sec" id="simHold">📏 高度ホールド: OFF</button>
           <button class="tbtn sec" id="simGhost">👻 ゴースト: ON</button>
+          <button class="tbtn sec" id="simPjit">🎲 出力ゆらぎ: OFF</button>
         </div>
         <div id="simout" class="simstat"></div>
-        <div id="gearWarn" class="note" style="display:none;color:var(--bad)">⚠ 着陸装置が「なし」です。滑走路離陸には⑥で単輪/三輪式を選んでください(発進台専用機は滑走できません)。</div>
+        <div id="gearWarn" class="note" style="display:none;color:var(--bad)">⚠ 着陸装置が「なし」です。滑走路離陸には⑥で前後2輪を選んでください(発進台専用機は滑走できません)。</div>
         <div id="simSl"></div>
-        <div class="note">プラットフォーム発進=高度10m・琵琶湖。滑走路離陸=地上滑走(滑走路500m)→引き起こし→上昇。<b>操縦: ↑↓=エレベーター、←→(A/D)=エルロン、Q/E=ラダー、出力スライダー</b>。エルロン非搭載機(④)はロールが効かずラダー+上反角効果のみ。荷重倍数nが桁の限界を超える、またはVNE超過で<b>空中分解</b>します。📏高度ホールドONで目標高度を自動維持(エレベーター操作中は一時無効)。OFFなら完全手動です。🤖性能計測オートは持続出力(⑥)+無酸素容量W'の体力モデルで自動操縦し、機体本来の飛距離を計測します(ホールドは常時ON)。発進速度スライダーはプラットフォーム時のみ有効。水面付近では地面効果で誘導抗力が減ります。風は「風・突風」タブで風向(360°)+風速を設定(現在 <span id="simWN"></span>)。30km到達で打切り。</div>
+        <div class="note">プラットフォーム発進=高度10m・琵琶湖。滑走路離陸=地上滑走(滑走路 幅30m×2000m・着陸滑走も可)→引き起こし→上昇。<b>操縦: ↑↓=エレベーター、←→(A/D)=エルロン、Q/E=ラダー、出力スライダー</b>。エルロン非搭載機(④)はロールが効かずラダー+上反角効果のみ。荷重倍数nが桁の限界を超える、またはVNE超過で<b>空中分解</b>します。📏高度ホールドONで目標高度を自動維持(エレベーター操作中は一時無効)。OFFなら完全手動です。🤖性能計測オートは持続出力(⑥)+無酸素容量W'の体力モデルで自動操縦し、機体本来の飛距離を計測します(ホールドは常時ON)。発進速度スライダーはプラットフォーム時のみ有効。水面付近では地面効果で誘導抗力が減ります。風は「風・突風」タブで風向(360°)+風速を設定(現在 <span id="simWN"></span>)。30km到達で打切り。</div>
       </div>
       <div class="tcol"><canvas id="chH" class="chart"></canvas></div>
       <div class="tcol"><canvas id="chV" class="chart"></canvas></div>
     </div>`;
     const sl=p.querySelector("#simSl");
     mkSlider2(sl,"パイロット出力(飛行中も変更可)",simPrm,"P",0,700,10," W");
-    mkSlider2(sl,"発進速度(対地)",simPrm,"V0",4,10,0.1," m/s");
+    mkSlider2(sl,"発進速度(対地)",simPrm,"V0",0,10,0.1," m/s");
     mkSlider2(sl,"巡航目標高度(ホールド/オート時)",simPrm,"hTgt",0.5,6,0.1," m");
     mkSlider2(sl,"再生速度",simPrm,"speed",1,40,1," ×");
     mkSlider2(sl,"無酸素容量 W'(オート用)",simPrm,"wcap",8,30,1," kJ");
@@ -2420,14 +2692,18 @@ sim:{
     const gh=p.querySelector("#simGhost");
     const ghUp=()=>{gh.textContent="👻 ゴースト: "+(simPrm.ghost?"ON":"OFF");gh.className="tbtn"+(simPrm.ghost?"":" sec");};
     gh.onclick=()=>{simPrm.ghost=!simPrm.ghost;ghUp();};
+    const pj=p.querySelector("#simPjit");
+    const pjUp=()=>{pj.textContent="🎲 出力ゆらぎ: "+(simPrm.pjit?"ON":"OFF");pj.className="tbtn"+(simPrm.pjit?"":" sec");};
+    pj.onclick=()=>{simPrm.pjit=!simPrm.pjit;pjUp();};
     ghUp();
+    pjUp();
     abUp();
     const mb=()=>{
       p.querySelector("#simMp").className="tbtn"+(simPrm.mode==="platform"?"":" sec");
       p.querySelector("#simMr").className="tbtn"+(simPrm.mode==="runway"?"":" sec");
     };
-    p.querySelector("#simMp").onclick=()=>{simPrm.mode="platform";mb();};
-    p.querySelector("#simMr").onclick=()=>{simPrm.mode="runway";mb();updGearWarn();};
+    p.querySelector("#simMp").onclick=()=>{simPrm.mode="platform";mb();placeForMode();};
+    p.querySelector("#simMr").onclick=()=>{simPrm.mode="runway";mb();updGearWarn();placeForMode();};
     const updGearWarn=()=>{
       const w=p.querySelector("#gearWarn");if(!w)return;
       w.style.display=(simPrm.mode==="runway"&&(!st.gear||st.gear==="none"))?"block":"none";
@@ -2474,7 +2750,7 @@ wind:{
         <button id="rollWx" style="font-size:11px;padding:3px 9px;border-radius:6px;border:1.5px solid var(--accent);background:#fff;color:var(--accent);cursor:pointer;font-weight:700">🎲 引き直す</button>
       </div><div style="color:var(--inksoft);margin-top:3px;line-height:1.4">${wx.d}</div>`;
       sl.appendChild(wc);
-      wc.querySelector("#rollWx").onclick=()=>{simPrm.weather=rollBiwaWeather();simPrm._dirJit=0;simPrm._tempJit=0;applySummer();this.refresh();};
+      wc.querySelector("#rollWx").onclick=()=>{simPrm.weather=rollBiwaWeather();simPrm._dirJit=0;simPrm._tempJit=0;applySummer();buildSettingsPanel();};
     }
     mkSlider2(sl,"時刻(鳥人間は早朝〜午前が勝負)",simPrm,"tod",5,18,0.5,"時",()=>{if(simPrm.summer)applySummer();this.refresh();});
     mkSlider2(sl,"気温(大気密度に影響)",simPrm,"temp",-5,38,1," ℃",()=>this.refresh());
@@ -2482,7 +2758,7 @@ wind:{
     mkSlider2(sl,"サーマル(上昇気流の強さ)",simPrm,"thermal",0,1.2,0.05,"×",()=>this.refresh());
     mkSlider2(sl,"垂直突風",simPrm,"gust",0,3,0.1," m/s",()=>this.refresh());
     mkSlider2(sl,"CLmax(失速揚力係数)",simPrm,"CLmax",1.2,1.6,0.05,"",()=>this.refresh());
-    mkSlider2(sl,"発進速度(対地)",simPrm,"V0",4,10,0.1," m/s",()=>this.refresh());
+    mkSlider2(sl,"発進速度(対地)",simPrm,"V0",0,10,0.1," m/s",()=>this.refresh());
     this.refresh();
   },
   refresh(){
@@ -2532,6 +2808,7 @@ loads:{
     const half=st.span/2;
     o.innerHTML=`<div class="simstat">
       <span>翼端たわみ <b style="color:${r.tip/half<0.12?"var(--ok)":r.tip/half<0.2?"var(--warn)":"var(--bad)"}">${r.tip.toFixed(2)} m</b> (半翼幅の${(r.tip/half*100).toFixed(0)}%)</span>
+      <span>実効上反角 <b>${r.dihEff.toFixed(1)}°</b> (据付 ${r.baseDih.toFixed(1)}° + たわみ ${r.bendDih>=0?"+":""}${r.bendDih.toFixed(1)}°) @${loadPrm.n.toFixed(1)}G</span>
       <span>根元曲げ ${r.Mroot.toFixed(0)} N·m</span>
       <span>桁安全率 <b style="color:${r.SF>=1.5?"var(--ok)":r.SF>=1?"var(--warn)":"var(--bad)"}">${r.SF.toFixed(2)}</b> @${loadPrm.n.toFixed(1)}G</span>
     </div>`;
@@ -2637,7 +2914,7 @@ function openTool(k){
 // ツールのカテゴリ分け: 設計モードと飛行モードで出し分け
 const TOOL_CAT={
   sim:"flight", wind:"flight",
-  tv:"design", loads:"design", polar:"design", ribs:"design", save:"design"
+  loads:"design", polar:"design", ribs:"design", save:"design"
 };
 function initTools(){
   const tb=document.getElementById("toolbar");
@@ -2696,72 +2973,14 @@ function wireThrottle(){
     b.addEventListener("pointercancel",release);
   };
   bind("coElUp","e",1); bind("coElDn","e",-1);
-  bind("coAlL","ail",-1); bind("coAlR","ail",1);
-  bind("coRdL","rud",-1); bind("coRdR","rud",1);
+  bind("coAlL","rud",-1); bind("coAlR","rud",1);
+  bind("coRdL","ail",-1); bind("coRdR","ail",1);
 }
 function refreshTools(){
   if(simPlay)stopSim();
   if(curTool&&TOOLS[curTool]&&TOOLS[curTool].refresh)TOOLS[curTool].refresh();
 }
 
-
-// ================= 3面図リファレンス読み込み =================
-const tvGroup=new THREE.Group(); designGroup.add(tvGroup);
-const tvPrm={topSize:8,sideSize:8,frontSize:30,opacity:0.55};
-const tvData={top:{},side:{},front:{}};
-const TV_DEF={
-  top:{label:"上面図",hint:"機体の下に水平表示(スケール=画像の長辺)"},
-  side:{label:"側面図",hint:"機体の左横に表示(スケール=画像の幅)"},
-  front:{label:"正面図",hint:"機首の前に表示(スケール=画像の幅)"}};
-function tvBuild(kind){
-  const d=tvData[kind];
-  if(d.mesh){tvGroup.remove(d.mesh); d.mesh=null;}
-  if(!d.img)return;
-  const L=tvPrm[kind+"Size"];
-  const asp=(d.img.naturalHeight||1)/(d.img.naturalWidth||1);
-  const tex=new THREE.Texture(d.img); tex.needsUpdate=true;
-  const mat=new THREE.MeshBasicMaterial({map:tex,transparent:true,opacity:tvPrm.opacity,side:THREE.DoubleSide,depthWrite:false});
-  const m=new THREE.Mesh(new THREE.PlaneGeometry(L,L*asp),mat);
-  if(d.flip)m.scale.x=-1;
-  if(kind==="top"){m.rotateX(-Math.PI/2); if(!d.rot)m.rotateZ(Math.PI/2); m.position.set(0,0.06,L/2);}
-  else if(kind==="side"){m.rotateY(Math.PI/2); if(d.rot)m.rotateZ(Math.PI/2); m.position.set(-1.0,Math.max(L*asp/2,0.6)+0.02,L/2);}
-  else {if(d.rot)m.rotateZ(Math.PI/2); m.position.set(0,Math.max(L*asp/2,0.6)+0.02,-0.9);}
-  d.mesh=m; tvGroup.add(m);
-}
-function tvRebuildAll(){for(const k of ["top","side","front"])tvBuild(k);}
-TOOLS.tv={
-  render(p){
-    p.innerHTML='<div class="trow">'+["top","side","front"].map(k=>`
-      <div class="tcol" style="border:1px solid var(--line);border-radius:8px;padding:8px">
-        <b style="font-size:12.5px">${TV_DEF[k].label}</b>
-        <div style="margin:6px 0"><input type="file" id="tvF_${k}" accept="image/*" style="font-size:11px;max-width:100%"></div>
-        <div id="tvS_${k}"></div>
-        <label style="font-size:11.5px;margin-right:10px"><input type="checkbox" id="tvR_${k}"> 90°回転</label>
-        <label style="font-size:11.5px;margin-right:10px"><input type="checkbox" id="tvX_${k}"> 左右反転</label>
-        <button class="tbtn sec" id="tvD_${k}" style="padding:2px 8px;font-size:11px">消去</button>
-        <div class="note">${TV_DEF[k].hint}</div>
-      </div>`).join("")+
-      `</div><div style="max-width:340px;margin-top:6px" id="tvOp"></div>
-      <div class="note">手描き・CAD出力・既存機の3面図画像(PNG/JPG)を読み込み、半透明の下絵として3Dに重ねられます。スケールスライダーで実寸(m)を合わせ、テンプレートとスライダーで形状を下絵に寄せていく使い方を想定しています。</div>`;
-    for(const k of ["top","side","front"]){
-      mkSlider2(p.querySelector("#tvS_"+k),"実寸スケール",tvPrm,k+"Size",1,40,0.5," m",()=>tvBuild(k));
-      const f=p.querySelector("#tvF_"+k);
-      f.onchange=e=>{
-        const file=e.target.files&&e.target.files[0]; if(!file)return;
-        const r=new FileReader();
-        r.onload=()=>{const img=new Image(); img.onload=()=>{tvData[k].img=img; tvBuild(k);}; img.src=r.result;};
-        r.readAsDataURL(file);
-      };
-      const cr=p.querySelector("#tvR_"+k); cr.checked=!!tvData[k].rot;
-      cr.onchange=()=>{tvData[k].rot=cr.checked; tvBuild(k);};
-      const cx=p.querySelector("#tvX_"+k); cx.checked=!!tvData[k].flip;
-      cx.onchange=()=>{tvData[k].flip=cx.checked; tvBuild(k);};
-      p.querySelector("#tvD_"+k).onclick=()=>{tvData[k].img=null; tvBuild(k);};
-    }
-    mkSlider2(p.querySelector("#tvOp"),"下絵の透明度",tvPrm,"opacity",0.1,1,0.05,"",()=>tvRebuildAll());
-  },
-  refresh(){}};
-TOOL_LABELS.tv="🗺 3面図";
 
 // ===== 総合解析ツール =====
 function computeAnalysis(){
@@ -2861,7 +3080,12 @@ setMode("design");
 if(window.ResizeObserver)new ResizeObserver(()=>resize()).observe(vp);
 (function loop(){
   requestAnimationFrame(loop);
-  if(propGroup)propGroup.rotation.z+=0.06;
+  if(propGroup){
+    // 飛行中は実回転数(rpm)に連動。非飛行時はゆっくりアイドル
+    const fly=simPlay&&simPlay.live&&!simPlay.live.done&&!(simPlay.wait>0);
+    const spin=fly?(simPlay.live.nps||0)*2*Math.PI/60:0.06; // rev/s→rad/frame(60fps)
+    propGroup.rotation.z+=Math.min(spin,0.9);
+  }
   simTick();
   tickFx();
   if(appMode==="flight"){
@@ -2869,7 +3093,7 @@ if(window.ResizeObserver)new ResizeObserver(()=>resize()).observe(vp);
     // 地面・グリッドをカメラ直下へ移動して描画切れを防ぐ
     const cx=camera.position.x, cz=camera.position.z;
     grid.position.set(Math.round(cx/20)*20, 0, Math.round(cz/20)*20);
-    lake.position.set(cx,-0.02,cz);
+    lake.position.set(cx,-0.35,cz);   // グリッド線(y=0)と離してZファイティング(地面が透ける)を防ぐ
   }
   renderer.render(scene,camera);
 })();
