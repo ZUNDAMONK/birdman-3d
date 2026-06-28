@@ -1657,7 +1657,7 @@ function gustCalc(){
 
 // ---- 飛行シミュレーション ----
 const RWY_START=2000;   // 滑走路発進位置(後端側)。滑走路は z=14..2014(2000m)
-const simPrm={P:270,V0:7.0,wind:0,xwind:0,wdir:0,wspd:0,gust:1.0,CLmax:1.4,hTgt:2.0,speed:3,mode:"platform",auto:false,wcap:20,sens:1.0,hold:false,temp:20,turb:0.3,view:"chase",tod:7.0,summer:true,thermal:0.0,ghost:true,pjit:false,_t:0};
+const simPrm={P:270,V0:7.0,wind:0,xwind:0,wdir:0,wspd:0,gust:1.0,CLmax:1.4,hTgt:2.0,speed:3,mode:"platform",auto:false,wcap:20,sens:1.0,hold:false,temp:20,turb:0.3,view:"chase",tod:7.0,summer:true,thermal:0.0,ghost:true,pjit:false,_t:0,_wspdJit:0};
 // 風向(吹いてくる方角: 0°=正面=向かい風, 90°=右から, 180°=追い風)+風速 → コース成分へ分解
 function applyWindVec(){
   const th=simPrm.wdir*Math.PI/180;
@@ -1668,11 +1668,11 @@ function applyWindVec(){
 // 鳥人間は早朝〜午前が勝負。午後は浜風が強まり危険、という実条件を再現
 // 夏の琵琶湖の「その日の天候」をランダムに引く(実際の気象パターンに基づく)
 const BIWA_WEATHER=[
-  {id:"calm",   n:"快晴・朝凪",   d:"絶好のコンディション。風弱く安定",   wind:0.6, gust:0.5, turb:0.6, therm:0.8, dirJit:15, prob:0.30},
-  {id:"normal", n:"晴れ・通常",   d:"標準的な夏の日。午後から浜風",       wind:1.0, gust:0.9, turb:1.0, therm:1.0, dirJit:25, prob:0.32},
-  {id:"breezy", n:"やや強風",     d:"南西の風が強め。午後は注意",         wind:1.5, gust:1.2, turb:1.3, therm:0.9, dirJit:30, prob:0.18},
-  {id:"hira",   n:"比良おろし",   d:"比良山地からの吹き下ろし。突風に警戒", wind:1.7, gust:1.8, turb:1.6, therm:0.7, dirJit:45, prob:0.10},
-  {id:"humid",  n:"高温多湿・不安定",d:"気温高く対流活発。サーマル強・乱流大",wind:1.1, gust:1.4, turb:1.5, therm:1.4, dirJit:35, prob:0.10},
+  {id:"calm",   n:"快晴・朝凪",   d:"絶好のコンディション。風弱く安定",   wind:0.6, gust:0.5, turb:0.6, therm:0.3, dirJit:15, prob:0.30},
+  {id:"normal", n:"晴れ・通常",   d:"標準的な夏の日。午後から浜風",       wind:1.0, gust:0.9, turb:1.0, therm:0.4, dirJit:25, prob:0.32},
+  {id:"breezy", n:"やや強風",     d:"南西の風が強め。午後は注意",         wind:1.5, gust:1.2, turb:1.3, therm:0.3, dirJit:30, prob:0.18},
+  {id:"hira",   n:"比良おろし",   d:"比良山地からの吹き下ろし。突風に警戒", wind:1.7, gust:1.8, turb:1.6, therm:0.2, dirJit:45, prob:0.10},
+  {id:"humid",  n:"高温多湿・不安定",d:"気温高く対流活発。湖上サーマル・乱流大",wind:1.1, gust:1.4, turb:1.5, therm:0.6, dirJit:35, prob:0.10},
 ];
 function rollBiwaWeather(){
   const r=Math.random();let acc=0;
@@ -1690,8 +1690,8 @@ function applySummer(){
   simPrm.temp=Math.round(tempBase+(wx.id==="humid"?2:0)+(simPrm._tempJit||0));
   // 浜風: 朝凪→午前発達→午後最強。天候係数 + ランダムなゆらぎ
   const seaBreeze=Math.max(0,Math.min(1,(t-9)/4))*Math.max(0,1-(t-16)/3);
-  const breezeNoise=1+(Math.random()-0.5)*0.25;       // 瞬間ごとの±12%変動
-  simPrm.wspd=+Math.max(0,(0.5+3.8*seaBreeze)*wx.wind*breezeNoise).toFixed(1);
+  const breezeNoise=1+(simPrm._wspdJit||0);            // スムーズなゆらぎ(毎フレーム更新)
+  simPrm.wspd=+Math.max(0,(0.5+3.8*seaBreeze)*wx.wind*breezeNoise).toFixed(2);
   // 風向: 基本は南西(湖→陸)、天候ごとのばらつき(比良おろしは振れ大)
   simPrm.wdir=Math.round(200+(simPrm._dirJit||0)*1);
   // 乱流・サーマル: 時刻 × 天候係数
@@ -1712,6 +1712,9 @@ function updateEnv(){
       const dj=wx.dirJit||25;
       simPrm._dirJit=(simPrm._dirJit||0)*0.98+(Math.random()-0.5)*dj*0.06;
       simPrm._tempJit=(simPrm._tempJit||0)*0.99+(Math.random()-0.5)*0.3;
+      // 風速のスムーズなゆらぎ(±20%、時定数約3秒@60fps)
+      simPrm._wspdJit=(simPrm._wspdJit||0)*0.985+(Math.random()-0.5)*wx.wind*0.04;
+      simPrm._wspdJit=Math.max(-0.35,Math.min(0.35,simPrm._wspdJit));
     }
   }
   // 空・霞の色を時刻で変化(早朝=淡い金、日中=青、夕=橙)
@@ -1733,7 +1736,8 @@ function windLabel(){
   return names[Math.round(d/45)%8]+" "+simPrm.wspd.toFixed(1)+" m/s";
 }
 const loadPrm={n:1.0,apply:false};
-let simRes=null,simPlay=null,platform=null,trail=null,curTool=null;
+const _simResDefault={out:[{t:0,x:0,h:0,V:0,gam:0,n:0,yl:0,phi:0,path:0,psi:0}],Vs:10,runway:false,dist:0,time:0,splash:false,overrun:false,groundRoll:null};
+let simRes=Object.assign({},_simResDefault),simPlay=null,platform=null,trail=null,curTool=null;
 let ghostMesh=null, ghostPath=null, bestRun=null, lastRecording=null;
 function loadBest(){try{return JSON.parse(localStorage.getItem("birdman_best")||"null");}catch(e){return bestRun;}}
 function saveBest(v){bestRun=v;try{localStorage.setItem("birdman_best",JSON.stringify(v));}catch(e){}}
@@ -1806,7 +1810,7 @@ function stepSim(L,dt){
   if(simPrm.thermal>0){
     const cell=Math.sin(L.x*0.0045+1.3)*Math.cos(L.x*0.0021+L.yl*0.008);
     const core=Math.max(0,cell-0.45)/0.55;
-    const target=simPrm.thermal*(core>0?0.5*core:-0.02);    // 上昇流速度 m/s 相当
+    const target=simPrm.thermal*(core>0?0.25*core:-0.02);    // 上昇流速度 m/s 相当(湖上は陸上より弱い)
     L.thrm=(L.thrm||0)*0.985+target*0.015;                  // 強い平滑化(空間的に緩やか)
     L.inThermal=core>0.3;
     L.thrmVz=L.thrm;
@@ -1847,12 +1851,12 @@ function stepSim(L,dt){
     L.Pnow=P;
     L.autoVtgt=Vtgt;
   } else {
-    // 手動: 出力にランダムなゆらぎ(±10W, トグルON時)。有色ノイズで滑らかに
+    // 手動: 出力にランダムなゆらぎ(±5W, 0W時は無効, トグルON時)。有色ノイズで滑らかに
     P=simPrm.P;
-    if(simPrm.pjit){
-      L._pj=(L._pj||0)*0.9+(Math.random()-0.5)*6;
-      P=Math.max(0,simPrm.P+Math.max(-10,Math.min(10,L._pj)));
-    }
+    if(simPrm.pjit&&simPrm.P>5){
+      L._pj=(L._pj||0)*0.94+(Math.random()-0.5)*3;
+      P=Math.max(0,simPrm.P+Math.max(-5,Math.min(5,L._pj)));
+    } else { L._pj=0; }
     L.Pnow=P;
   }
   // 駆動伝達後の軸出力(チェーン/シャフトの伝達効率を反映)
@@ -1874,10 +1878,14 @@ function stepSim(L,dt){
     const dV=(T-q*c.S*CDg-0.02*Math.max(0,c.W-lift))/c.m;
     L.V=Math.max(0,L.V+dV*dt);
     L.x+=Math.max(0,L.V+simPrm.wind)*dt; L.t+=dt;
+    // 横風: タイヤ摩擦で半減させつつドリフト。ラダー操作で打ち消し可
+    const xwDrift=simPrm.xwind*(1-Math.abs(L.rud)*0.7);
+    L.yl+=xwDrift*dt;
     L.n=lift/c.W;
     if(L.V>=1.02*c.Vt||(L.e>0.25&&L.V>=1.04*c.Vs)){L.ground=false;if(L.groundRoll==null)L.groundRoll=L.x;}
-    else if((simPlay?(simPlay.z0-L.x):480-L.x)<10){L.overrun=true;L.done=true;}
-    else if(dV<=0.005&&L.t>20){L.overrun=true;L.done=true;}
+    else if((simPlay?(simPlay.z0-L.x):480-L.x)<10&&!L.touchdowns){L.overrun=true;L.done=true;}
+    // 初回滑走(未着陸)のみ: 加速できないなら終了。再着陸後はユーザーが止めるまで継続
+    else if(dV<=0.005&&L.t>20&&!L.touchdowns){L.overrun=true;L.done=true;}
     return;
   }
   // ---- 破壊後: 揚力を失って落下 ----
@@ -1939,10 +1947,14 @@ function stepSim(L,dt){
   if(L.h<=0&&L.V*Math.sin(L.gam)<0){
     const sink=-L.V*Math.sin(L.gam);                       // 沈下率 m/s
     const onLand=(simPlay&&(simPlay.z0-L.x)>14);           // 滑走路(陸)上か
-    if(c.hasGear&&onLand&&sink<1.5&&Math.abs(L.phi)<0.25){ // ソフトに接地
+    const rwMode=simPrm.mode==="runway";
+    const sinkOK=rwMode?(sink<3.0&&Math.abs(L.phi)<0.45):(sink<1.5&&Math.abs(L.phi)<0.25);
+    if(c.hasGear&&onLand&&sinkOK&&!L.broken){ // 滑走路=多少荒くても再接地OK
       L.ground=true;L.h=0;L.gam=0;L.touchdowns=(L.touchdowns||0)+1;
     } else {
-      L.splash=true;L.h=0;L.done=true;L.impact=(L.broken||!onLand&&sink>1.5)?"crash":(onLand?"crash":"splash");
+      // 滑走路モード: 胴体着陸でも即終了しない(gear無し or 激しすぎる場合)
+      if(rwMode&&onLand&&!L.broken){L.ground=true;L.h=0;L.gam=0;L.touchdowns=(L.touchdowns||0)+1;}
+      else{L.splash=true;L.h=0;L.done=true;L.impact=(L.broken||(!onLand&&sink>1.5))?"crash":(onLand?"crash":"splash");}
     }
   }
   // 方位を ±π に正規化(累積発散を防ぐ)
@@ -2010,7 +2022,7 @@ function startSim(){
   // ゴースト機(自己ベストの軌跡を半透明で再生)
   if(ghostMesh){scene.remove(ghostMesh);ghostMesh=null;}
   ghostPath=null;
-  if(simPrm.ghost){
+  if(simPrm.ghost&&!runway){
     const best=loadBest();
     if(best&&best.path&&best.path.length>5){
       ghostPath=best.path; ghostMesh=new THREE.Group();
@@ -2109,10 +2121,15 @@ function stopSim(){
   if(platform){scene.remove(platform);platform=null;}
   if(ghostMesh){scene.remove(ghostMesh);ghostMesh=null;}
   if(trail){scene.remove(trail);trail=null;}
-  if(aircraft){aircraft.position.set(0,10.2,0);aircraft.rotation.set(0,0,0);aircraft.visible=!fpvMode;} // デッキ上に戻す
-  fpvState={x:0,y:11,z:0,gam:0,psi:0,phi:0};
+  if(aircraft){
+    if(simPrm.mode==="runway"){aircraft.position.set(0,0,RWY_START);} // 滑走路先頭へ
+    else{aircraft.position.set(0,10.2,0);}                            // プラットフォームへ
+    aircraft.rotation.set(0,0,0);aircraft.visible=!fpvMode;
+  }
+  if(simPrm.mode==="runway"){fpvState={x:0,y:1,z:RWY_START,gam:0,psi:0,phi:0};orbit.target.set(0,2,RWY_START);}
+  else{fpvState={x:0,y:11,z:0,gam:0,psi:0,phi:0};orbit.target.set(0,11,2.5);}
   applyFlex(loadPrm&&loadPrm.apply?loadPrm.n:0, loadPrm&&loadPrm.apply?loadPrm.n:1);
-  orbit.target.set(0,11,2.5);applyCam();
+  applyCam();
 }
 function setCtrl(ax,v){
   if(!simPlay||!simPlay.live||simPlay.live.done||simPlay.live.auto)return;
@@ -2209,13 +2226,31 @@ function simTick(){
 }
 function updateSimReadout(L){
   drawHUD(L);
-  const d=document.getElementById("simout");if(!d||!simRes)return;
-  const cur=L||simRes.out[simRes.out.length-1]||{t:0,x:0,h:0,V:0};
+  // 下部バー: #simoutが無いタブ(風・突風など)でも常に更新
   const flying=!!simPlay;
   const waiting=flying&&simPlay.wait>0;
-  const stall=!waiting&&cur.V<simRes.Vs&&!(simPlay&&simPlay.live.ground);
-  const ev=L?L.e:0;
+  const cur=L||(simRes&&simRes.out[simRes.out.length-1])||{t:0,x:0,h:0,V:0,gam:0,n:0,yl:0,phi:0,path:0,psi:0};
+  const stall=!waiting&&cur.V<(simRes?simRes.Vs:10)&&!(simPlay&&simPlay.live&&simPlay.live.ground);
+  // fin: 着水・失速などの結果メッセージ(simResがデフォルト値=未飛行なら空)
+  let fin="";
+  if(simRes&&!flying){
+    const brk=simRes.brkMsg;
+    if(brk)fin=`<b style="color:var(--bad)">⚠ ${brk}</b> `;
+    fin+=simRes.offcourse?`<b style="color:var(--warn)">コース逸脱で計測終了(直線距離 ${simRes.dist.toFixed(0)} m)</b>`
+      :simRes.nogear?`<b style="color:var(--bad)">着陸装置がないため滑走できません(⑥で前後2輪を選択)</b>`
+      :simRes.overrun?`<b style="color:var(--bad)">滑走路2000m以内に離陸速度へ届きません(到達 ${simRes.dist.toFixed(0)} m)</b>`
+      :simRes.splash?`<b style="color:var(--bad)">着水! 飛距離 ${simRes.dist.toFixed(0)} m</b>`
+      :simRes.dist>0?`<b style="color:var(--ok)">${simRes.auto?"性能計測: ":""}${simRes.dist>=29999?"30km到達で打切り — 巡航成立!":(simRes.auto?"飛距離 "+simRes.dist.toFixed(0)+" m(体力切れ)":"時間切れ("+simRes.dist.toFixed(0)+" m)")}</b>`:"";
+    if(simRes.newBest)fin+=` <b style="color:var(--accent)">🎉 自己ベスト更新!</b>`;
+    else{const bst=loadBest();if(bst&&simRes.dist>0)fin+=` <span style="opacity:.7">(自己ベスト ${bst.dist.toFixed(0)}m)</span>`;}
+    if(simRes.badges&&simRes.badges.length)fin+=`<br><span style="color:var(--accent)">${simRes.badges.join(" ")}</span>`;
+  }
+  updateFlightData(L,cur,flying,waiting,stall,fin);   // ← 常に先に呼ぶ
+
+  // #simout(シミュタブ専用ステータス行)
+  const d=document.getElementById("simout");if(!d||!simRes)return;
   const lv=flying?simPlay.live:null;
+  const ev=L?L.e:0;
   const nF=lv?lv.c.nFail:null;
   const nv=L&&L.n!=null?L.n:null;
   const nCol=nv!=null&&nF?(nv>0.85*nF?"var(--bad)":nv>0.6*nF?"var(--warn)":"inherit"):"inherit";
@@ -2226,31 +2261,33 @@ function updateSimReadout(L){
   const roll=simRes.runway&&(simRes.groundRoll!=null||(L&&L.groundRoll!=null))
     ?` <span>滑走 <b>${((L&&L.groundRoll!=null?L.groundRoll:simRes.groundRoll)).toFixed(0)} m</b></span>`:"";
   const td=L&&L.touchdowns?` <span>接地 ${L.touchdowns}回</span>`:"";
-  const brk=(L&&L.broken)||simRes.brkMsg;
-  let fin=brk?`<b style="color:var(--bad)">⚠ ${brk}</b> `:"";
-  if(!flying){
-    fin+=simRes.offcourse
-      ?`<b style="color:var(--warn)">コース逸脱で計測終了(直線距離 ${simRes.dist.toFixed(0)} m)</b>`
-      :simRes.nogear
-      ?`<b style="color:var(--bad)">着陸装置がないため滑走できません(⑥で前後2輪を選択)</b>`
-      :simRes.overrun
-      ?`<b style="color:var(--bad)">滑走路2000m以内に離陸速度へ届きません(到達 ${simRes.dist.toFixed(0)} m)</b>`
-      :simRes.splash
-      ?`<b style="color:var(--bad)">着水! 飛距離 ${simRes.dist.toFixed(0)} m</b>`
-      :simRes.dist>0
-      ?`<b style="color:var(--ok)">${simRes.auto?"性能計測: ":""}${simRes.dist>=29999?"30km到達で打切り — 巡航成立!":(simRes.auto?"飛距離 "+simRes.dist.toFixed(0)+" m(体力切れ)":"時間切れ("+simRes.dist.toFixed(0)+" m)")}</b>`:"";
-    if(simRes.newBest)fin+=` <b style="color:var(--accent)">🎉 自己ベスト更新!</b>`;
-    else{const bst=loadBest();if(bst)fin+=` <span style="opacity:.7">(自己ベスト ${bst.dist.toFixed(0)}m)</span>`;}
-    if(simRes.badges&&simRes.badges.length)fin+=`<br><span style="color:var(--accent)">${simRes.badges.join(" ")}</span>`;
-  }
   d.innerHTML=(waiting?`<span><b>発進待機…</b></span>`:"")+
     (flying?`<span>t ${cur.t.toFixed(1)}s</span>`:`<span>距離 <b>${(cur.path!=null?cur.path:cur.x).toFixed(0)} m</b></span><span>最高 ${cur.h.toFixed(1)}m</span>`)+
     roll+td+" "+fin;
-  // 飛行データオーバーレイ(画面下部・薄い灰色背景)
-  updateFlightData(L,cur,flying,waiting,stall,fin);
+}
+// 機首相対の風向SVGを生成(psi=機首方位[rad], 発進前はpsi=0)
+function makeWindSvg(psi){
+  const ww=simPrm.wind, wx2=simPrm.xwind;
+  const fwd=ww*Math.cos(psi)+wx2*Math.sin(psi);
+  const rgt=-ww*Math.sin(psi)+wx2*Math.cos(psi);
+  const relDeg=simPrm.wspd>0.1?Math.atan2(-rgt,-fwd)*180/Math.PI:0;
+  return simPrm.wspd>0.1
+    ?`<svg width="32" height="32" viewBox="-16 -16 32 32" style="display:block">
+        <circle r="13" fill="rgba(0,0,0,0.15)" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+        <line x1="0" y1="-2" x2="0" y2="6" stroke="rgba(255,255,255,0.4)" stroke-width="1.5" stroke-linecap="round"/>
+        <g transform="rotate(${relDeg.toFixed(1)})">
+          <line x1="0" y1="-12" x2="0" y2="-4" stroke="#7CFC9A" stroke-width="2.5" stroke-linecap="round"/>
+          <polygon points="0,-1 4,-7 -4,-7" fill="#7CFC9A"/>
+        </g>
+      </svg>`
+    :`<svg width="32" height="32" viewBox="-16 -16 32 32" style="display:block">
+        <circle r="13" fill="rgba(0,0,0,0.15)" stroke="rgba(255,255,255,0.3)" stroke-width="1.5"/>
+        <circle r="2.5" fill="rgba(255,255,255,0.4)"/>
+      </svg>`;
 }
 function updateFlightData(L,cur,flying,waiting,stall,fin){
   const fd=document.getElementById("flightData");if(!fd)return;
+  const setFd=html=>{if(fd._lastHTML!==html){fd._lastHTML=html;fd.innerHTML=html;}};
   const sp=document.getElementById("sidePanel");
   if(appMode!=="flight"){fd.classList.remove("on");if(sp)sp.classList.remove("on");return;}
   fd.classList.add("on");
@@ -2260,32 +2297,38 @@ function updateFlightData(L,cur,flying,waiting,stall,fin){
     if(sp)sp.classList.toggle("on",!fpvMode);
     const nF=lv.c.nFail, nv=cur.n!=null?cur.n:1;
     const vCls=stall?"bad":"";
-    const P=lv.Pnow!=null?lv.Pnow:simPrm.P;   // 手動の出力ゆらぎも反映
-    // 対地速度 = 対気速度の水平成分 + 追い風成分
+    const P=lv.Pnow!=null?lv.Pnow:simPrm.P;
     const vAir=cur.V, vGround=vAir*Math.cos(cur.gam||0)+simPrm.wind;
-    // 風向(吹いてくる方向)を矢印で
-    const wd=((simPrm.wdir%360)+360)%360;
-    const arrows=["↓","↙","←","↖","↑","↗","→","↘"];
-    const wArrow=simPrm.wspd>0.1?arrows[Math.round(wd/45)%8]:"·";
-    fd.innerHTML=`<div class="fd-row">
+    const wSvg=makeWindSvg(lv.psi||0);
+    setFd(`<div class="fd-row">
       <span class="fd-item">距離<b>${dist.toFixed(0)} m</b></span>
       <span class="fd-item ${vCls}">対気速度<b>${vAir.toFixed(1)} m/s</b></span>
       <span class="fd-item">対地速度<b>${vGround.toFixed(1)} m/s</b></span>
       <span class="fd-item">出力<b>${P.toFixed(0)} W</b></span>
       <span class="fd-item">回転<b>${(lv.rpm||0).toFixed(0)} rpm</b></span>
       <span class="fd-item">高度<b>${cur.h.toFixed(1)} m</b></span>
-      <span class="fd-item">荷重<b class="${nv>0.85*nF?'':''}">${nv.toFixed(2)}</b></span>
-      <span class="fd-item fd-wind"><span class="fd-windarrow">${wArrow}</span><span>wind ${simPrm.wspd.toFixed(1)}</span></span>
-    </div>`;
-    // 右側の高度・速度グラフを更新
+      <span class="fd-item">荷重<b>${nv.toFixed(2)}</b></span>
+      <span class="fd-item fd-wind">${wSvg}<span>wind ${simPrm.wspd.toFixed(2)}</span></span>
+    </div>`);
     drawSidePanels();
   } else if(waiting){
     if(sp)sp.classList.add("on");
-    fd.innerHTML=`<div class="fd-msg"><b>発進待機中…</b></div>`;
+    const wSvg=makeWindSvg(0);
+    setFd(`<div class="fd-row">
+      <button data-fd-action="stop" style="pointer-events:auto;padding:6px 14px;border-radius:8px;border:none;background:rgba(100,110,120,0.8);color:#fff;font-size:13px;font-weight:bold;cursor:pointer;font-family:inherit">■ 中止</button>
+      <span class="fd-item" style="color:#fff"><b>発進待機中…</b></span>
+      <span class="fd-item fd-wind">${wSvg}<span>wind ${simPrm.wspd.toFixed(2)}</span></span>
+    </div>`);
   } else {
     if(sp)sp.classList.remove("on");
-    fd.innerHTML=`<div class="fd-row"><span class="fd-item">飛行距離<b>${dist.toFixed(0)} m</b></span></div>`+
-      (fin?`<div class="fd-msg">${fin}</div>`:"");
+    const wSvg=makeWindSvg(0);
+    setFd(`<div class="fd-row">
+      <button data-fd-action="start" style="pointer-events:auto;padding:6px 18px;border-radius:8px;border:none;background:#E8590C;color:#fff;font-size:14px;font-weight:bold;cursor:pointer;font-family:inherit">▶ 発進</button>
+      <button data-fd-action="reset" style="pointer-events:auto;padding:6px 14px;border-radius:8px;border:none;background:rgba(100,110,120,0.8);color:#fff;font-size:13px;font-weight:bold;cursor:pointer;font-family:inherit">↺ リセット</button>
+      <span class="fd-item">飛行距離<b>${dist.toFixed(0)} m</b></span>
+      <span class="fd-item fd-wind">${wSvg}<span>wind ${simPrm.wspd.toFixed(2)}</span></span>
+    </div>`+
+      (fin?`<div class="fd-msg">${fin}</div>`:""));
   }
 }
 // 右側パネル: 高度・速度の時系列グラフ(直近の履歴をスクロール表示)
@@ -2320,15 +2363,25 @@ function drawGpsMap(cur){
   dot(pf,"#7CFC9A",5);dot(north,"#ff5a5a",5);dot(south,"#5aa0ff",5);
   c.fillStyle="#cfe";c.font="9px system-ui";c.textAlign="center";
   c.fillText("北",north.x,north.y-7);c.fillText("南",south.x,south.y+13);c.fillText("PF",pf.x+10,pf.y+3);
-  // 自機: 往路(PF→北パイロン)を進捗で配置 + 横ずれ(yl)
-  const dist=(cur&&cur.x)||0, frac=Math.max(0,Math.min(1,dist/PYLON_DIST));
-  const ax=pf.x+(north.x-pf.x)*frac, ay=pf.y+(north.y-pf.y)*frac;
-  const dx=north.x-pf.x, dy=north.y-pf.y, L=Math.hypot(dx,dy)||1;
-  const nx=-dy/L, ny=dx/L, off=Math.max(-16,Math.min(16,(cur&&cur.yl||0)*0.01));
-  c.fillStyle="#E8590C";c.beginPath();c.arc(ax+nx*off,ay+ny*off,4,0,7);c.fill();
-  c.strokeStyle="#fff";c.lineWidth=1;c.stroke();
+  // 自機: 実際の2D位置(L.x=前進距離, L.yl=横ずれ)をキャンバス座標に変換
+  // パイロンを超えても・旋回して戻っても正確に追従
+  const cx_w=(cur&&cur.yl)||0, cz_w=(cur&&cur.x)||0;
+  const cAx=(north.x-pf.x)/PYLON_DIST, cAy=(north.y-pf.y)/PYLON_DIST; // コース方向スケール
+  const cLen=Math.hypot(cAx,cAy)||1;
+  const perx=-cAy/cLen*cLen, pery=cAx/cLen*cLen;  // 横方向単位ベクトル×スケール
+  const dotX=pf.x+cAx*cz_w+perx*cx_w*0.006;
+  const dotY=pf.y+cAy*cz_w+pery*cx_w*0.006;
+  if(dotX>=2&&dotX<=w-2&&dotY>=2&&dotY<=h-2){
+    c.fillStyle="#E8590C";c.beginPath();c.arc(dotX,dotY,4,0,7);c.fill();
+    c.strokeStyle="#fff";c.lineWidth=1;c.stroke();
+  } else {
+    // キャンバス外は端にクリップして表示
+    const cx2=Math.max(3,Math.min(w-3,dotX)), cy2=Math.max(3,Math.min(h-3,dotY));
+    c.fillStyle="#E8590Caa";c.beginPath();c.arc(cx2,cy2,3,0,7);c.fill();
+  }
   const gv=document.getElementById("gpsVal");
-  if(gv)gv.textContent=(dist/1000).toFixed(1)+"km";
+  // 距離は経路累積(path)を使用 → 旋回・後退しても減らない
+  if(gv)gv.textContent=((cur&&cur.path!=null?cur.path:cz_w)/1000).toFixed(1)+"km";
 }
 function drawMiniGraph(id,vals,color,yMin,refLine){
   const cv=document.getElementById(id);if(!cv||!vals.length)return;
@@ -2733,25 +2786,29 @@ wind:{
     const sl=p.querySelector("#windSl");
     mkSlider2(sl,"風向(0°=向かい風/90°=右から/180°=追い風)",simPrm,"wdir",0,360,5,"°",()=>{applyWindVec();this.refresh();});
     mkSlider2(sl,"風速",simPrm,"wspd",0,8,0.1," m/s",()=>{applyWindVec();this.refresh();});
+    // 気象ガチャ(常時表示)
+    {
+      if(!simPrm.weather)simPrm.weather=rollBiwaWeather();
+      const wx=simPrm.weather;
+      const wc=document.createElement("div");
+      wc.style.cssText="background:#eef3f8;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0;font-size:12px";
+      wc.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center">
+        <span><b>🎲 琵琶湖の天気:</b> ${wx.n}</span>
+        <button id="rollWx" style="font-size:11px;padding:3px 9px;border-radius:6px;border:1.5px solid var(--accent);background:#fff;color:var(--accent);cursor:pointer;font-weight:700">ガチャ</button>
+      </div><div style="color:var(--inksoft);margin-top:3px;line-height:1.4">${wx.d}</div>`;
+      sl.appendChild(wc);
+      wc.querySelector("#rollWx").onclick=()=>{
+        simPrm.weather=rollBiwaWeather();simPrm._dirJit=0;simPrm._tempJit=0;simPrm._wspdJit=0;
+        if(simPrm.summer)applySummer(); else applyWindVec();
+        buildSettingsPanel();
+      };
+    }
     // 夏の琵琶湖モード
     const sm=document.createElement("label");
     sm.style.cssText="display:flex;gap:6px;align-items:center;font-size:12.5px;margin:6px 0";
     sm.innerHTML='<input type="checkbox" id="sumChk"'+(simPrm.summer?" checked":"")+'> 夏の琵琶湖モード(時刻で風・気温・上昇気流が自動変化)';
     sl.appendChild(sm);
     sm.querySelector("#sumChk").onchange=e=>{simPrm.summer=e.target.checked;if(simPrm.summer){if(!simPrm.weather)simPrm.weather=rollBiwaWeather();applySummer();}this.refresh();};
-    // 今日の天候表示 + 引き直しボタン
-    if(simPrm.summer){
-      if(!simPrm.weather)simPrm.weather=rollBiwaWeather();
-      const wx=simPrm.weather;
-      const wc=document.createElement("div");
-      wc.style.cssText="background:#eef3f8;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0;font-size:12px";
-      wc.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center">
-        <span><b>今日の琵琶湖:</b> ${wx.n}</span>
-        <button id="rollWx" style="font-size:11px;padding:3px 9px;border-radius:6px;border:1.5px solid var(--accent);background:#fff;color:var(--accent);cursor:pointer;font-weight:700">🎲 引き直す</button>
-      </div><div style="color:var(--inksoft);margin-top:3px;line-height:1.4">${wx.d}</div>`;
-      sl.appendChild(wc);
-      wc.querySelector("#rollWx").onclick=()=>{simPrm.weather=rollBiwaWeather();simPrm._dirJit=0;simPrm._tempJit=0;applySummer();buildSettingsPanel();};
-    }
     mkSlider2(sl,"時刻(鳥人間は早朝〜午前が勝負)",simPrm,"tod",5,18,0.5,"時",()=>{if(simPrm.summer)applySummer();this.refresh();});
     mkSlider2(sl,"気温(大気密度に影響)",simPrm,"temp",-5,38,1," ℃",()=>this.refresh());
     mkSlider2(sl,"乱流の強さ(低空ほど強い)",simPrm,"turb",0,1.5,0.05,"×",()=>this.refresh());
@@ -2921,8 +2978,8 @@ function initTools(){
   tb.addEventListener("click",e=>{const k=e.target.dataset&&e.target.dataset.t;if(k)openTool(k);});
   buildToolbar();
   const KEYMAP={ArrowUp:["e",1],KeyW:["e",1],ArrowDown:["e",-1],KeyS:["e",-1],
-    ArrowLeft:["ail",-1],KeyA:["ail",-1],ArrowRight:["ail",1],KeyD:["ail",1],
-    KeyQ:["rud",-1],KeyE:["rud",1]};
+    ArrowLeft:["ail",-1],KeyQ:["ail",-1],ArrowRight:["ail",1],KeyE:["ail",1],
+    KeyA:["rud",-1],KeyD:["rud",1]};
   window.addEventListener("keydown",ev=>{
     if(!simPlay)return;
     // 出力操作: +/- や [ ] で出力増減(飛行中いつでも)
@@ -2975,6 +3032,17 @@ function wireThrottle(){
   bind("coElUp","e",1); bind("coElDn","e",-1);
   bind("coAlL","rud",-1); bind("coAlR","rud",1);
   bind("coRdL","ail",-1); bind("coRdR","ail",1);
+}
+function initFlightDataButtons(){
+  const fd=document.getElementById("flightData");
+  if(!fd)return;
+  fd.addEventListener("click",e=>{
+    const btn=e.target.closest("[data-fd-action]");
+    if(!btn)return;
+    const act=btn.dataset.fdAction;
+    if(act==="start"){startSim();if(TOOLS.sim)TOOLS.sim.refresh();}
+    else if(act==="stop"||act==="reset"){stopSim();updateSimReadout(null);}
+  });
 }
 function refreshTools(){
   if(simPlay)stopSim();
@@ -3070,7 +3138,7 @@ TOOL_LABELS.analysis="📊 総合解析";
 TOOL_CAT.analysis="design";
 
 // ================= 起動 =================
-loadFromHash(); buildUI(); buildAircraft(); resize(); applyCam(); initTools(); wireThrottle();
+loadFromHash(); buildUI(); buildAircraft(); resize(); applyCam(); initTools(); wireThrottle(); initFlightDataButtons();
 // モード切替ボタン配線 + 初期は設計モード
 document.getElementById("modeDesign").addEventListener("click",()=>setMode("design"));
 document.getElementById("modeFlight").addEventListener("click",()=>setMode("flight"));
@@ -3080,6 +3148,8 @@ setMode("design");
 if(window.ResizeObserver)new ResizeObserver(()=>resize()).observe(vp);
 (function loop(){
   requestAnimationFrame(loop);
+  // 非飛行中も下部バーと風向矢印をリアルタイム更新(4フレームに1回で十分)
+  if(!simPlay&&appMode==="flight"&&((loop._t=(loop._t||0)+1)%4===0))updateSimReadout(null);
   if(propGroup){
     // 飛行中は実回転数(rpm)に連動。非飛行時はゆっくりアイドル
     const fly=simPlay&&simPlay.live&&!simPlay.live.done&&!(simPlay.wait>0);
