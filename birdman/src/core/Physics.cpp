@@ -919,7 +919,9 @@ void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, 
     const double astallE = c.astall
                          + ((c.flapDCLmax - c.flapDCL) * L.flap + (geL - 1) * c.CLmax) / c.CLa;
     const double CLminE = effectiveCLmin(c, L);
-    const double astallNeg = (CLminE - c.CLcruise) / c.CLa;
+    // CL需要がCLminへ到達する迎角。フラップ揚力を差し引かないと、展開時に
+    // まだ正揚力の領域でも負側失速が早期発動してしまう。
+    const double astallNeg = (CLminE - c.CLcruise - c.flapDCL * L.flap) / c.CLa;
     // 短時間突風の初期荷重は3DOFと同じ線形ΔCLを使う。失速判定は機体姿勢由来の
     // 迎角に適用し、突風分はCLmaxまでの瞬間荷重として加える（ピッチモーメントは
     // 下のalphaAeroで突風を含むため、その後の6DOF応答は維持される）。

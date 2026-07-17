@@ -37,6 +37,8 @@ void Career::load() {
                     r.year = (int)jn(o, "y", 0);
                     r.dist = jn(o, "d", 0);
                     r.prize = jn(o, "p", 0);
+                    r.sixdof = jn(o, "s", 0) != 0;
+                    r.assist = jn(o, "a", 1) != 0;
                     size_t w = o.find("\"w\":\"");
                     if (w != std::string::npos) {
                         size_t e = o.find('"', w + 5);
@@ -56,7 +58,9 @@ void Career::save() const {
     for (size_t i = 0; i < st.hist.size(); i++) {
         if (i) f << ",";
         f << "{\"y\":" << st.hist[i].year << ",\"w\":\"" << st.hist[i].wx
-          << "\",\"d\":" << st.hist[i].dist << ",\"p\":" << st.hist[i].prize << "}";
+          << "\",\"d\":" << st.hist[i].dist << ",\"p\":" << st.hist[i].prize
+          << ",\"s\":" << (st.hist[i].sixdof ? 1 : 0)
+          << ",\"a\":" << (st.hist[i].assist ? 1 : 0) << "}";
     }
     f << "]}";
 }
@@ -97,23 +101,27 @@ std::vector<std::string> Career::lockViolations(const AircraftParams& p) const {
 }
 
 std::string Career::recordContest(const std::string& wxName, double dist, double cost,
-                                  int rank, int field) {
+                                  int rank, int field, bool sixdof, bool assist) {
     double prize = dist >= 10000 ? 300 : dist >= 5000 ? 150 : dist >= 1000 ? 60 : dist >= 100 ? 20 : 0;
     int repGain = dist >= 10000 ? 3 : dist >= 5000 ? 2 : dist >= 1000 ? 1 : 0;
     if (rank == 1) { prize += 80; repGain += 1; }             // 優勝ボーナス
     CareerYearRec r;
     r.year = st.year; r.wx = wxName; r.dist = dist; r.prize = prize;
+    r.sixdof = sixdof; r.assist = assist;
     st.hist.push_back(r);
     st.money = std::max(0.0, st.money - cost) + prize + 60;   // 賞金+スポンサー料60
     st.rep += repGain;
     st.year++;
     save();
-    char b[200];
+    const char* tag = sixdof ? (assist ? u8"拡張/補助ON" : u8"拡張/補助OFF")
+                             : u8"標準/常時補助相当";
+    char b[240];
     if (rank > 0)
-        std::snprintf(b, sizeof(b), u8"第%d回大会 %d位/%d機 %.0fm — 賞金%.0f万円 評判+%d%s",
-                      r.year, rank, field, dist, prize, repGain, rank == 1 ? u8" 優勝!!" : "");
+        std::snprintf(b, sizeof(b), u8"第%d回大会 %d位/%d機 %.0fm [%s] — 賞金%.0f万円 評判+%d%s",
+                      r.year, rank, field, dist, tag, prize, repGain, rank == 1 ? u8" 優勝!!" : "");
     else
-        std::snprintf(b, sizeof(b), u8"第%d回大会 %.0fm — 賞金%.0f万円 評判+%d", r.year, dist, prize, repGain);
+        std::snprintf(b, sizeof(b), u8"第%d回大会 %.0fm [%s] — 賞金%.0f万円 評判+%d",
+                      r.year, dist, tag, prize, repGain);
     return b;
 }
 

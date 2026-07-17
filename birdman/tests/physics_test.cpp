@@ -86,6 +86,9 @@ int main() {
     check(!L.sparBroken, "no structural failure in calm cruise");
     check(std::abs(L.officialDist - L.pathAir) / std::max(1.0, L.pathAir) < 0.02,
           "calm straight flight official distance remains within 2% of legacy air path");
+    constexpr double PHASE3_STD_CRUISE_600M = 5542.6;
+    check(std::abs(L.officialDist / PHASE3_STD_CRUISE_600M - 1.0) <= 0.02,
+          "phase4: standard default cruise distance stays within 2% of Phase 3 baseline");
     check(minV > c.Vs * 0.8, "never deep-stalled");
 
     // ---- オート(性能計測)フライト ----
@@ -135,6 +138,9 @@ int main() {
                     L6.officialDist, L3.officialDist, L6.officialDist / L3.officialDist);
         check(std::abs(L6.officialDist / L3.officialDist - 1) < 0.25,
               "6DOF cruise distance within 25%% of 3DOF");
+        constexpr double PHASE3_ROT_CRUISE_300M = 2436.0;
+        check(std::abs(L6.officialDist / PHASE3_ROT_CRUISE_300M - 1.0) <= 0.02,
+              "phase4: expanded default cruise distance stays within 2% of Phase 3 baseline");
         // エレベーターパルス応答: 減衰して戻る(SM>0の動的発現)
         FlightState Lp = makeInitialState(c6, p6, 0);
         while (Lp.t < 60) stepSim6(Lp, c6, p6, 0.02);
@@ -1220,6 +1226,24 @@ int main() {
         check(n3.n < 0 && n6.n < 0, "phase4: both physics models produce negative load with the same sign");
         check(std::abs(n3.n - n6.n) / std::max(0.05, std::abs(n3.n)) <= 0.35,
               "phase4: negative-load magnitude differs by no more than 35 percent");
+
+        // フラップ展開時も、実際のCL需要がCLminへ達するまでは負側失速させない。
+        SimParams flapPrm = assistOff; flapPrm.funPlane = true;
+        AircraftConstants flapC = funPlaneConstants(flapPrm);
+        flapC.nFailNeg = -99; flapC.VNE = 99;
+        FlightState flapL = makeInitialState(flapC, flapPrm, 0);
+        flapL.ground = false; flapL.h = 200; flapL.V = flapC.Vdesign;
+        flapL.flap = flapL.flapTgt = 1.0; flapL.init6 = true;
+        const double flapCLmin = std::min(-0.15, -0.50 * flapC.CLmax + 0.60 * flapC.flapDCL);
+        const double flapDemand = flapCLmin + 0.25 * flapC.flapDCL;
+        flapL.gam = 0;
+        flapL.theta = (flapDemand - flapC.CLcruise - flapC.flapDCL) / flapC.CLa;
+        flapL.alpha = flapL.theta;
+        stepSim6(flapL, flapC, flapPrm, 0.02);
+        const double flapExpectedN = 0.5 * flapC.rho * flapC.Vdesign * flapC.Vdesign
+                                   * flapC.S * flapDemand / flapC.W;
+        check(near(flapL.n, flapExpectedN, 1e-9),
+              "phase4: deployed flap does not trigger negative stall before CL demand reaches CLmin");
 
         auto crossingN = [&](bool six, double target) {
             FlightState x = makeInitialState(cn, assistOff, 0);

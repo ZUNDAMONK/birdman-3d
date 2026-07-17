@@ -11,6 +11,8 @@ struct CareerYearRec {
     std::string wx;         // 大会当日の天候名
     double dist = 0;        // 記録 m
     double prize = 0;       // 賞金 万円
+    bool sixdof = false;    // 大会時の物理モデル(旧保存は標準)
+    bool assist = true;     // 大会時の拡張物理補助(旧保存はON)
 };
 struct CareerState {
     int year = 1;
@@ -34,7 +36,8 @@ public:
     std::vector<std::string> lockViolations(const AircraftParams& p) const;
     // 大会結果を記録(賞金・評判・翌年へ)。rank>0ならライバル込み順位(1=優勝ボーナス)
     std::string recordContest(const std::string& wxName, double dist, double cost,
-                              int rank = 0, int field = 0);
+                              int rank = 0, int field = 0,
+                              bool sixdof = false, bool assist = true);
 };
 
 // ---- チャレンジミッション ----

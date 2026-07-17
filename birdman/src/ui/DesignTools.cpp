@@ -395,10 +395,12 @@ void DesignTools::draw(sf::RenderTarget& rt, HUD& hud, float W, float H) {
         // 歴代成績
         const float hx = p.left + 470;
         drawText(rt, font, u8"歴代成績", hx, p.top + 32, 12, INK, 0, true);
-        drawText(rt, font, u8"年    天候         記録m    賞金", hx, p.top + 52, 10, INKSOFT);
+        drawText(rt, font, u8"年    天候         記録m   物理/補助  賞金", hx, p.top + 52, 10, INKSOFT);
         for (size_t i = 0; i < cr.st.hist.size() && i < 9; i++) {
             const auto& r = cr.st.hist[cr.st.hist.size() - 1 - i];
-            std::snprintf(b, sizeof(b), u8"%2d   %-10s  %7.0f   %.0f万円", r.year, r.wx.c_str(), r.dist, r.prize);
+            const char* tag = r.sixdof ? (r.assist ? u8"拡/ON" : u8"拡/OFF") : u8"標/常";
+            std::snprintf(b, sizeof(b), u8"%2d   %-10s  %7.0f   %-6s  %.0f万円",
+                          r.year, r.wx.c_str(), r.dist, tag, r.prize);
             drawText(rt, font, b, hx, p.top + 70 + i * 16, 11, INK);
         }
         if (cr.st.hist.empty())

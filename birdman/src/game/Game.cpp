@@ -391,7 +391,8 @@ void Game::stopSim() {
             // 中止=そこまでの距離が公式記録(実際の大会も着水/中断地点まで)
             const int wi = prm_.weather;
             courseMsg_ = career_.recordContest(wi >= 0 ? siteWeather(prm_.site)[wi].name : "-",
-                                               simActive_ ? live_.officialDist : 0.0, contestCost_);
+                                               simActive_ ? live_.officialDist : 0.0, contestCost_,
+                                               0, 0, prm_.sixdof, prm_.assist);
             courseMsgTimer_ = 8;
             prm_ = prmBackup_;
             contestActive_ = false;
@@ -567,7 +568,8 @@ void Game::finishSim() {
         const int wi = prm_.weather;
         const std::string wx = wi >= 0 ? siteWeather(prm_.site)[wi].name : "-";
         courseMsg_ = career_.recordContest(wx, simRes_.dist, contestCost_,
-                                           rank, (int)rivals_.size() + 1);
+                                           rank, (int)rivals_.size() + 1,
+                                           simRes_.sixdof, simRes_.assist);
         if (!bestRival.empty() && rank > 1) {
             char rb[120];
             std::snprintf(rb, sizeof(rb), u8"  (1位 %s %.0fm)", bestRival.c_str(), bestRivalDist);
