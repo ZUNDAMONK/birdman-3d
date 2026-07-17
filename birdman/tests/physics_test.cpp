@@ -5,7 +5,7 @@
 #include "core/Aircraft.hpp"
 #include "core/Physics.hpp"
 #include "core/Weather.hpp"
-#include "core/Weather.hpp"
+#include "core/SiteConst.hpp"
 #include <cstdio>
 #include <cmath>
 #include <cassert>
@@ -27,6 +27,7 @@ int main() {
     SimParams prm;
     prm.turb = 0; prm.thermal = 0; prm.summer = false; prm.pjit = false;
     prm.wind = 0; prm.xwind = 0; prm.temp = 20;
+    prm.terrainWind = false;
 
     // ---- analyze ----
     Analysis a = analyze(st);
@@ -75,12 +76,14 @@ int main() {
         steps++;
         if (steps % 1500 == 0)  // 30秒毎
             std::printf("  t=%-5.0f x=%7.1f h=%6.2f V=%6.3f gam=%+.4f n=%.3f path=%.0f\n",
-                L.t, L.x, L.h, L.V, L.gam, L.n, L.path);
+                L.t, L.x, L.h, L.V, L.gam, L.n, L.officialDist);
     }
-    std::printf("  end: t=%.1f path=%.1fm splash=%d broken=%d %s\n",
-        L.t, L.path, (int)L.splash, (int)L.broken, L.brokenMsg.c_str());
-    check(L.path > 3000, "default aircraft with 270W flies >3km");
-    check(!L.broken, "no structural failure in calm cruise");
+    std::printf("  end: t=%.1f official=%.1fm pathAir=%.1fm splash=%d broken=%d %s\n",
+        L.t, L.officialDist, L.pathAir, (int)L.splash, (int)L.sparBroken, L.failureMsg.c_str());
+    check(L.officialDist > 3000, "default aircraft with 270W flies >3km");
+    check(!L.sparBroken, "no structural failure in calm cruise");
+    check(std::abs(L.officialDist - L.pathAir) / std::max(1.0, L.pathAir) < 0.02,
+          "calm straight flight official distance remains within 2% of legacy air path");
     check(minV > c.Vs * 0.8, "never deep-stalled");
 
     // ---- オート(性能計測)フライト ----
@@ -88,8 +91,9 @@ int main() {
     AircraftConstants cA = aeroPack(st, a, prmA);
     FlightState LA = makeInitialState(cA, prmA, 0);
     while (!LA.done && LA.t < 3700) stepSim(LA, cA, prmA, 0.02);
-    std::printf("\n[auto] path=%.0fm t=%.0fs done(broken=%d splash=%d)\n", LA.path, LA.t, (int)LA.broken, (int)LA.splash);
-    check(LA.path > 5000, "autopilot flies >5km");
+    std::printf("\n[auto] path=%.0fm t=%.0fs done(broken=%d splash=%d)\n",
+                LA.officialDist, LA.t, (int)LA.sparBroken, (int)LA.splash);
+    check(LA.officialDist > 5000, "autopilot flies >5km");
 
     // ---- 天候システム ----
     SimParams ps; ps.summer = true; ps.weather = 4; // humid
@@ -118,15 +122,17 @@ int main() {
             if (L6.t > 20) { maxAl = std::max(maxAl, std::abs(L6.alpha)); minV6 = std::min(minV6, L6.V); }
         }
         std::printf("      cruise300s: path=%.0fm h=%.2f V=%.2f alpha=%.4f theta=%.4f (maxAl=%.3f)\n",
-                    L6.path, L6.h, L6.V, L6.alpha, L6.theta, maxAl);
+                    L6.officialDist, L6.h, L6.V, L6.alpha, L6.theta, maxAl);
         check(!L6.done, "6DOF: sustains flight for 300s at 270W");
         check(maxAl < 0.25, "6DOF: AoA stays bounded in cruise");
         check(minV6 > c6.Vs * 0.75, "6DOF: no deep stall in cruise");
         // 3DOFとの整合: 300秒の距離が±25%以内
         FlightState L3 = makeInitialState(c, prm, 0);
         while (!L3.done && L3.t < 300) stepSim(L3, c, prm, 0.02);
-        std::printf("      dist 6DOF=%.0f vs 3DOF=%.0f (ratio %.2f)\n", L6.path, L3.path, L6.path / L3.path);
-        check(std::abs(L6.path / L3.path - 1) < 0.25, "6DOF cruise distance within 25%% of 3DOF");
+        std::printf("      dist 6DOF=%.0f vs 3DOF=%.0f (ratio %.2f)\n",
+                    L6.officialDist, L3.officialDist, L6.officialDist / L3.officialDist);
+        check(std::abs(L6.officialDist / L3.officialDist - 1) < 0.25,
+              "6DOF cruise distance within 25%% of 3DOF");
         // エレベーターパルス応答: 減衰して戻る(SM>0の動的発現)
         FlightState Lp = makeInitialState(c6, p6, 0);
         while (Lp.t < 60) stepSim6(Lp, c6, p6, 0.02);
@@ -153,8 +159,8 @@ int main() {
         AircraftConstants ca6 = aeroPack(st, a, pa6);
         FlightState La6 = makeInitialState(ca6, pa6, 0);
         while (!La6.done && La6.t < 3650) stepSim6(La6, ca6, pa6, 0.02);
-        std::printf("      autopilot 6DOF: path=%.0fm t=%.0fs\n", La6.path, La6.t);
-        check(La6.path > 5000, "6DOF: autopilot flies >5km");
+        std::printf("      autopilot 6DOF: path=%.0fm t=%.0fs\n", La6.officialDist, La6.t);
+        check(La6.officialDist > 5000, "6DOF: autopilot flies >5km");
     }
 
     // ---- 発進挙動マトリクス回帰(6DOF失敗事例の恒久チェック) ----
@@ -184,12 +190,12 @@ int main() {
         FlightState r310 = fly(false, 10), r610 = fly(true, 10);
         std::printf("\n[launch matrix small-wing Vs=10.3]\n");
         std::printf("      V0=4 : 3DOF x=%.0f splash=%d / 6DOF x=%.0f splash=%d\n",
-                    r37.path, (int)r37.splash, r67.path, (int)r67.splash);
+                    r37.officialDist, (int)r37.splash, r67.officialDist, (int)r67.splash);
         std::printf("      V0=10: 3DOF x=%.0f splash=%d / 6DOF x=%.0f splash=%d\n",
-                    r310.path, (int)r310.splash, r610.path, (int)r610.splash);
+                    r310.officialDist, (int)r310.splash, r610.officialDist, (int)r610.splash);
         check(r37.splash && r67.splash, "underspeed launch ditches in BOTH models (consistent physics)");
         check(!r310.splash && !r610.splash, "V0=10 launch flies in BOTH models");
-        check(r610.path > 1000, "6DOF small-wing cruises after proper launch");
+        check(r610.officialDist > 1000, "6DOF small-wing cruises after proper launch");
         // デフォルト機は手動・無入力でも6DOFで飛び続ける(暗黙パイロット)
         SimParams pd = prm; pd.sixdof = true;
         AircraftConstants cd = aeroPack(st, a, pd);
@@ -199,7 +205,7 @@ int main() {
             stepSim6(Ld, cd, pd, 0.02);
             if (Ld.t > 1) minH = std::min(minH, Ld.h);
         }
-        std::printf("      default 6DOF hands-off: x=%.0f minH=%.2f\n", Ld.path, minH);
+        std::printf("      default 6DOF hands-off: x=%.0f minH=%.2f\n", Ld.officialDist, minH);
         check(!Ld.splash && minH > 3, "default aircraft flies hands-off in 6DOF (implicit pilot)");
     }
 
@@ -447,6 +453,15 @@ int main() {
         check(insideWaterSite(pf, -2000, -100), "fujikawa: Fuji river ribbon is water");
         check(!insideWaterSite(pf, -500, -300), "fujikawa: runway riverbed is land");
         check(!insideWaterSite(pf, -500, 3000), "fujikawa: western plain is land");
+        check(!insideWaterSite(pf, -120, -160), "fujikawa: visible upstream sandbar is land");
+        check(insideWaterSite(pf, -500, -100), "fujikawa: river point outside sandbars is water");
+        check(!insideWaterSite(pf, -400, -40), "fujikawa: near-bank inside is land");
+        check(!insideWaterSite(pf, 950, -320), "fujikawa: mouth sandbar is land");
+        check(insideWaterSite(pf, 1050, -320), "fujikawa: water around mouth sandbar stays water");
+        check(site::insideFujikawaRunway(-860, 15) && site::insideFujikawaRunway(-10, -15),
+              "fujikawa: shared 850x30m runway bounds include both edges");
+        check(!site::insideFujikawaRunway(-861, 0) && !site::insideFujikawaRunway(-100, 15.1),
+              "fujikawa: shared runway bounds reject outside points");
         SimParams pb = prm;
         check(insideWaterSite(pb, 500, 0) == insideLake(500, 0), "site=biwa keeps insideLake behavior");
         // 風向: 早朝=陸風(追い風≈185)、日中=海風(向かい風≈25)
@@ -468,6 +483,30 @@ int main() {
         check(av > av2, "fujikawa: weaker lift over the river than over land");
     }
 
+    // ---- 公式距離: 発進点からの対地直線距離(pathAirとは独立) ----
+    {
+        FlightState d = makeInitialState(c, prm, 0);
+        d.x = d.officialX0 + 600;
+        d.yl = d.officialYl0 + 800;
+        d.pathAir = 4200;
+        refreshOfficialDistance(d);
+        const double first = d.officialDist;
+        d.pathAir = 9000;                 // 蛇行で対気経路だけ増えた想定
+        refreshOfficialDistance(d);
+        check(near(first, 1000.0, 1e-9) && near(d.officialDist, first, 1e-9),
+              "official distance depends only on the common ground endpoint");
+        check(near(d.pathAir, 9000.0, 1e-9), "air path remains available separately for analysis");
+
+        AircraftConstants noGear = c;
+        noGear.hasGear = false;
+        SimParams rw = prm; rw.mode = "runway"; rw.site = "fujikawa";
+        FlightState invalid = makeInitialState(noGear, rw, site::FUJI_START_Z_BASE);
+        invalid.x = 500;
+        refreshOfficialDistance(invalid);
+        check(invalid.nogear && invalid.done && near(invalid.officialDist, 0.0, 1e-12),
+              "nogear launch is an invalid zero official record");
+    }
+
     // ---- 富士川の自由発進(第5弾): startPos/startHdg ----
     // 発進方位0°/90°/180°の3ケースで、機首方位・滑走方向・風との相対関係
     // (南の海風時: 0°=向かい風/180°=追い風)と滑走路逸脱・overrun新判定を検証
@@ -485,7 +524,7 @@ int main() {
         // ケース1: hdg=0(通常・南向き) → 向かい風で初期対気速度 = pushV+2
         {
             AircraftConstants c0 = aeroPack(st, a, pf);
-            FlightState L0 = makeInitialState(c0, pf, 850.0);
+            FlightState L0 = makeInitialState(c0, pf, site::FUJI_START_Z_BASE);
             std::printf("      hdg=0  : psi=%+.2f V0=%.2f (pushV=%.1f, 海風=向かい風)\n",
                         L0.psi, L0.V, pf.pushV);
             check(std::abs(L0.psi) < 1e-9, "free start: default heading 0 (backward compatible)");
@@ -495,7 +534,7 @@ int main() {
         {
             SimParams p1 = pf; p1.startHdg = 180;
             AircraftConstants c1 = aeroPack(st, a, p1);
-            FlightState L1 = makeInitialState(c1, p1, 850.0);
+            FlightState L1 = makeInitialState(c1, p1, site::FUJI_START_Z_BASE);
             const double x0 = L1.x;
             std::printf("      hdg=180: psi=%+.2f V0=%.2f (海風=追い風)\n", L1.psi, L1.V);
             check(near(std::abs(L1.psi), PI_T, 1e-6), "free start: hdg=180 sets psi=pi");
@@ -512,8 +551,8 @@ int main() {
             SimParams p2 = pf; p2.startHdg = 90; p2.wind = 0;
             SimParams p3 = pf; p3.wind = 0;                        // 比較用 hdg=0(滑走路上)
             AircraftConstants c2 = aeroPack(st, a, p2);
-            FlightState L2 = makeInitialState(c2, p2, 850.0);
-            FlightState L3 = makeInitialState(c2, p3, 850.0);
+            FlightState L2 = makeInitialState(c2, p2, site::FUJI_START_Z_BASE);
+            FlightState L3 = makeInitialState(c2, p3, site::FUJI_START_Z_BASE);
             for (int i = 0; i < 250; i++) {
                 if (L2.ground && !L2.done) stepSim(L2, c2, p2, 0.02);
                 if (L3.ground && !L3.done) stepSim(L3, c2, p3, 0.02);
@@ -530,10 +569,12 @@ int main() {
         {
             SimParams p4 = pf; p4.wind = 0;
             AircraftConstants c4 = aeroPack(st, a, p4);
-            FlightState L4 = makeInitialState(c4, p4, 850.0);
-            L4.rollDist = 1100;    // 判定分岐の単体検証: 1050m超の滑走状態を直接与える
+            FlightState L4 = makeInitialState(c4, p4, site::FUJI_START_Z_BASE);
+            L4.rollDist = site::FUJI_OVERRUN_DISTANCE + 50;
             stepSim(L4, c4, p4, 0.02);
             check(L4.overrun && L4.done, "free start: rollDist>1050 without liftoff -> overrun (fujikawa rule)");
+            check(L4.officialInvalid && near(L4.officialDist, 0.0, 1e-12),
+                  "free start: pre-liftoff overrun invalidates official record");
         }
     }
 
@@ -625,13 +666,51 @@ int main() {
             std::printf("      sink1.5: ground=%d / sink3.0: bounce(td=%d hard=%d V=%.2f) / "
                         "sink4.0: broken=%d / sink5.5: crash=%d / wingtip1.5: bounce=%d\n",
                         (int)n1.ground, b1.touchdowns, (int)b1.hardLanding, b1.V,
-                        (int)g1.broken, (int)(x1.done && x1.splash), (int)(!w1.ground && w1.touchdowns == 1));
-            check(n1.ground && !n1.broken && !n1.done, "v6 touchdown: sink 1.5 -> normal landing");
+                        (int)g1.gearBroken, (int)(x1.done && x1.crashed), (int)(!w1.ground && w1.touchdowns == 1));
+            check(n1.ground && !n1.gearBroken && !n1.sparBroken && !n1.crashed && !n1.done,
+                  "v6 touchdown: sink 1.5 -> normal landing");
             check(!b1.ground && b1.touchdowns == 1 && b1.hardLanding && b1.V < 8 * 0.93,
                   "v6 touchdown: sink 3.0 -> hard landing bounce (V x0.92)");
-            check(g1.ground && g1.broken && !g1.done, "v6 touchdown: sink 4.0 -> gear broken, still rolling");
-            check(x1.done && x1.splash && x1.impact == "crash", "v6 touchdown: sink 5.5 -> crash");
+            check(g1.ground && g1.gearBroken && !g1.sparBroken && !g1.crashed && !g1.done,
+                  "v6 touchdown: sink 4.0 -> gear broken only, still rolling");
+            check(x1.done && x1.crashed && !x1.splash && x1.impact == "crash",
+                  "v6 touchdown: sink 5.5 -> land crash (not splash)");
             check(!w1.ground && w1.touchdowns == 1, "v6 touchdown: bank>12deg worsens one band (1.5 -> bounce)");
+
+            // 気体の経路角だけでなく、下降流を含む実鉛直速度で接地区分が決まる。
+            auto downdraftTouch = [&](bool sixdof) {
+                FlightState D{};
+                D.V = 8; D.gam = -std::asin(1.5 / 8.0); D.h = 0.01;
+                D.x = -400; D.z0 = 0; D.yl = 0; D.t = 5; D.tz = -1.2;
+                D.theta = D.gam; D.init6 = sixdof;
+                for (int i = 0; i < 4 && !D.done && !D.ground && D.touchdowns == 0; i++)
+                    sixdof ? stepSim6(D, cg, pg, 0.02) : stepSim(D, cg, pg, 0.02);
+                return D;
+            };
+            const FlightState d3 = downdraftTouch(false);
+            const FlightState d6 = downdraftTouch(true);
+            check(d3.hardLanding && d3.touchdowns == 1,
+                  "3DOF touchdown uses downdraft in actual sink rate");
+            check(d6.hardLanding && d6.touchdowns == 1,
+                  "6DOF touchdown uses downdraft in actual sink rate");
+
+            auto touchAt = [&](double courseX, double yl, bool sixdof) {
+                FlightState A{};
+                A.V = 8; A.gam = -std::asin(1.0 / 8.0); A.h = 0.01;
+                A.x = courseX; A.z0 = 0; A.yl = yl; A.t = 5;
+                A.theta = A.gam; A.init6 = sixdof;
+                for (int i = 0; i < 4 && !A.done && !A.ground; i++)
+                    sixdof ? stepSim6(A, cg, pg, 0.02) : stepSim(A, cg, pg, 0.02);
+                return A;
+            };
+            for (bool sixdof : {false, true}) {
+                const FlightState sand = touchAt(-120, -160, sixdof);
+                const FlightState water = touchAt(-500, -100, sixdof);
+                check(sand.ground && !sand.splash,
+                      sixdof ? "6DOF visible sandbar permits landing" : "3DOF visible sandbar permits landing");
+                check(water.done && water.splash && !water.crashed,
+                      sixdof ? "6DOF visible river causes splash" : "3DOF visible river causes splash");
+            }
         }
 
         // (5) デフォルト発進(滑走路再設計850m: startPos=830 南エンド+startHdg=180 北向き):
@@ -644,10 +723,11 @@ int main() {
             p5.dirJit = p5.tempJit = p5.wspdJit = p5.gustJit = 0;
             applySummer(p5);
             p5.turb = 0; p5.thermal = 0;                       // 決定的にするため乱流・サーマルは切る
-            check(near(p5.startPos, 830.0, 1e-12), "v7 default: startPos is 830 (south end)");
+            check(near(p5.startPos, site::FUJI_START_POS_DEFAULT, 1e-12),
+                  "v7 default: startPos is 830 (south end)");
             check(near(p5.startHdg, 180.0, 1e-12), "v7 default: startHdg is 180 (facing north)");
             AircraftConstants c5 = aeroPack(st, a, p5);
-            const double z0f = 850.0 - p5.startPos;            // Game側と同じ変換(830 -> z0=20)
+            const double z0f = site::fujikawaStartWorldZ(p5.startPos);
             FlightState L5 = makeInitialState(c5, p5, z0f);
             check(near(std::abs(L5.psi), PI_T, 1e-6), "v7 default: initial heading is north (psi=pi)");
             double tLift = -1, rollAtLift = -1;
@@ -672,7 +752,8 @@ int main() {
             }
             std::printf("      default launch (南端・北向き, 海風日和14時 wind=%.1f=追い風): 離陸滑走 %.0fm t=%.1fs maxH=%.1fm\n",
                         p5.wind, rollAtLift, tLift, maxH);
-            check(tLift >= 0 && rollAtLift < 1050, "v7 default: lifts off within the 1050m roll budget (downwind full-runway run)");
+            check(tLift >= 0 && rollAtLift < site::FUJI_OVERRUN_DISTANCE,
+                  "v7 default: lifts off within the 1050m roll budget (downwind full-runway run)");
             check(!L5.done && maxH > 3, "v7 default: keeps flying after downwind takeoff");
         }
 
@@ -688,7 +769,7 @@ int main() {
                 pi.wind = 0; pi.xwind = 0; pi.turb = 0; pi.thermal = 0;
                 AircraftConstants ci = aeroPack(si, ai, pi);
                 // Game側と同じ発進原点変換(デフォルト: 南エンドstartPos=830 → z0=20)
-                FlightState Li = makeInitialState(ci, pi, 850.0 - pi.startPos);
+                FlightState Li = makeInitialState(ci, pi, site::fujikawaStartWorldZ(pi.startPos));
                 while (Li.ground && !Li.done && Li.t < 200) {
                     if (rotate && Li.V >= ci.Vs) Li.eTgt = 0.5;   // 引き起こし操作
                     stepSim(Li, ci, pi, 0.02);
@@ -759,14 +840,14 @@ int main() {
         AircraftConstants cf = aeroPack(st, a, prm);
         FlightState Lf = makeInitialState(cf, prm, 0);
         int steps = 0;
-        while (!Lf.broken && steps++ < 6000) {
+        while (!Lf.sparBroken && steps++ < 6000) {
             Lf.V = cf.VNE * 0.95;   // VNE手前を維持(振動域)
             Lf.h = 100;
             stepSim(Lf, cf, prm, 0.02);
         }
         std::printf("\n[flutter] broken after %.1fs at 0.95VNE: %s (fatigue=%.2f)\n",
-                    steps * 0.02, Lf.brokenMsg.c_str(), Lf.fatigue);
-        check(Lf.broken, "sustained near-VNE flight breaks the spar by fatigue");
+                    steps * 0.02, Lf.failureMsg.c_str(), Lf.fatigue);
+        check(Lf.sparBroken, "sustained near-VNE flight breaks the spar by fatigue");
         check(steps * 0.02 > 3, "but not instantly (warning window exists)");
     }
 

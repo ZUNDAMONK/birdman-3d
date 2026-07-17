@@ -4,6 +4,7 @@
 // JSのNumberはdouble精度のため、物理コアはdoubleで実装(数値一致性を優先)。
 #include <string>
 #include <vector>
+#include "core/SiteConst.hpp"
 
 namespace bm {
 
@@ -88,7 +89,7 @@ struct SimParams {
     // 滑走路再設計(850×30m, 南エンド=RWY36/海側 z=10, 北エンド=RWY18/内陸側 z=860):
     // デフォルトは南エンド(startPos=830)から北向き(startHdg=180)=
     // 「南端から滑走路全長を北へ向いて使う」配置
-    double startPos = 830;              // 滑走路に沿った発進位置 0〜840m(0=北端, 830=南エンド)
+    double startPos = site::FUJI_START_POS_DEFAULT; // 滑走路に沿った発進位置 0〜840m(0=北端, 830=南エンド)
     double startHdg = 180;              // 発進機首方位(コース前方基準の度数。0=南向き, 180=北向き, ±180)
 };
 
@@ -169,7 +170,11 @@ struct AircraftConstants {
 
 // ---- 飛行状態 (JSの L 相当) ----
 struct FlightState {
-    double t = 0, x = 0, h = 0, V = 0, gam = 0, psi = 0, phi = 0, yl = 0, path = 0;
+    double t = 0, x = 0, h = 0, V = 0, gam = 0, psi = 0, phi = 0, yl = 0;
+    double pathAir = 0;                  // 対気水平経路長(解析用。公式記録には使わない)
+    double officialDist = 0;             // 発進点から現在地点までの対地水平直線距離
+    double officialX0 = 0, officialYl0 = 0;
+    bool   officialInvalid = false;      // 発進不成立(nogear/離陸前overrun)は記録0
     double e = 0, ail = 0, rud = 0;
     double eTgt = 0, ailTgt = 0, rudTgt = 0;
     double brake = 0;                    // 地上ブレーキ(0..1, キャッチャー相当)
@@ -183,8 +188,10 @@ struct FlightState {
     double gly = 1.0;                    // 持久力(グリコーゲン残 0..1): 出力に比例して減り飛行中は回復しない
     double softHTgt = -1;                // -1 = 未初期化(JSのnull)
     bool   auto_ = false, done = false, ground = false;
-    bool   broken = false;
-    std::string brokenMsg;
+    bool   sparBroken = false;           // 主桁・構造破壊(空中破壊運動/破断音の対象)
+    bool   gearBroken = false;           // 着陸装置破損(高摩擦・再離陸禁止のみ)
+    bool   crashed = false;              // 地面/水面への致命的衝突
+    std::string failureMsg;
     int    touchdowns = 0;
     double tdT = -1e9;                   // 直近の接地時刻(再離陸の猶予判定用)
     double maxBank = 0;
@@ -217,7 +224,7 @@ struct FlightState {
 
 // 時系列サンプル (JSの simSample)
 struct SimSample {
-    double t, x, h, V, gam, n, yl, phi, path, psi;
+    double t, x, h, V, gam, n, yl, phi, officialDist, pathAir, psi;
 };
 
 // シミュ結果 (JSの simRes)
@@ -225,9 +232,10 @@ struct SimResult {
     std::vector<SimSample> out;
     double Vs = 10;
     bool   runway = false;
-    double dist = 0, time = 0;
+    double dist = 0, pathAir = 0, time = 0;
     bool   splash = false, overrun = false, offcourse = false, nogear = false;
     bool   landed = false;
+    bool   sparBroken = false, gearBroken = false, crashed = false;
     int    touchdowns = 0;
     double groundRoll = -1;
     double rollDist = 0;                 // 地上滑走の累積距離(overrunメッセージ用)

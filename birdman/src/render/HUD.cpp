@@ -103,7 +103,7 @@ float HUD::drawFlightBar(sf::RenderTarget& rt, float W, float H,
     };
     char b1[64], b2[64];
     if (flying && !waiting && L) {
-        const double dist = L->path;
+        const double dist = L->officialDist;
         // 対地速度は真の水平地上速度の大きさ(機首方位・横風・追い/向かい風を全て含む)。
         // 従来は横風成分を無視していた
         const double vAir = L->V;
@@ -307,7 +307,7 @@ void HUD::drawSidePanels(sf::RenderTarget& rt, float W, float H, const SimResult
     sf::FloatRect rGps(px, y2, 130, rowH), rSpd(px + 138, y2, panW - 138, rowH);
     box(rGps); box(rSpd);
     drawText(rt, font_, "GPS", rGps.left + 8, rGps.top + 6, 13, INK(), 0, true);
-    std::snprintf(buf, sizeof(buf), "%.1fkm", cur.path / 1000);
+    std::snprintf(buf, sizeof(buf), "%.1fkm", cur.officialDist / 1000);
     drawText(rt, font_, buf, rGps.left + rGps.width - 8, rGps.top + 6, 12, GREEN(), 2, true);
     {   // GPS俯瞰マップ (JS drawGpsMap + 湖岸形状・コース目標)
         sf::FloatRect m(rGps.left + 6, rGps.top + 26, rGps.width - 12, rowH - 34);
@@ -471,7 +471,7 @@ void HUD::drawInstruments(sf::RenderTarget& rt, float W, float H,
     }
     // --- 上部: 距離 ---
     drawPanelRect(rt, {TX(380), TY(18), TX(240), 34}, theme::panelSoft(), sf::Color::Transparent, 0);
-    std::snprintf(buf, sizeof(buf), "%.0f m", L.path);
+    std::snprintf(buf, sizeof(buf), "%.0f m", L.officialDist);
     drawText(rt, font_, buf, TX(500), TY(18) + 6, 20, INK(), 1, true);
     // --- 速度テープ(左) ---
     {

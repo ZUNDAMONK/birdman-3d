@@ -1,6 +1,7 @@
 #include "core/Physics.hpp"
 #include "core/Aircraft.hpp"
 #include "core/Weather.hpp"
+#include "core/SiteConst.hpp"
 #include <cmath>
 #include <random>
 #include <algorithm>
@@ -271,18 +272,34 @@ FlightState makeInitialState(const AircraftConstants& c, const SimParams& prm, d
     L.gam = 0;
     L.h = runway ? 0 : deckHeightAt(-DECK_LEN);
     L.x = runway ? 0 : -DECK_LEN;
+    L.officialX0 = L.x;
+    L.officialYl0 = L.yl;
     L.t = 0;
     L.n = 0;   // 滑走開始時は無荷重(デッキ/滑走路とも)
     L.auto_ = prm.auto_ && !prm.funPlane;   // お遊び機は手動スロットルのみ
     L.wbal = prm.wcap * 1000;
     L.Pnow = prm.auto_ ? c.CP : prm.P;
     L.z0 = z0;
-    if (runway && !c.hasGear) { L.done = true; L.overrun = true; L.nogear = true; }
+    if (runway && !c.hasGear) {
+        L.done = true; L.overrun = true; L.nogear = true; L.officialInvalid = true;
+    }
     return L;
 }
 
+void refreshOfficialDistance(FlightState& L) {
+    L.officialDist = L.officialInvalid
+                   ? 0.0
+                   : std::hypot(L.x - L.officialX0, L.yl - L.officialYl0);
+}
+
+static void invalidateOfficialDistance(FlightState& L) {
+    L.officialInvalid = true;
+    L.officialDist = 0;
+}
+
 SimSample simSample(const FlightState& L) {
-    return {L.t, L.x, L.h, L.V, L.gam, L.n, L.yl, L.phi, L.path, L.psi};
+    return {L.t, L.x, L.h, L.V, L.gam, L.n, L.yl, L.phi,
+            L.officialDist, L.pathAir, L.psi};
 }
 
 void stepTurbulence(FlightState& L, const SimParams& prm, double dt) {
@@ -462,7 +479,8 @@ static void applyTouchdown(FlightState& L, const SimParams& prm, double sink, bo
     int band = sink < 2.0 ? 0 : sink < 3.5 ? 1 : sink < 5.0 ? 2 : 3;
     if (std::abs(L.phi) > 12.0 * PI / 180.0) band = std::min(3, band + 1);   // 翼端接地
     if (band >= 3) {                       // クラッシュ
-        L.splash = true; L.h = 0; L.done = true; L.impact = "crash";
+        L.crashed = true; L.h = 0; L.done = true; L.impact = "crash";
+        L.failureMsg = u8"墜落(沈下率または翼端接地が限界超過)";
         return;
     }
     // 残留横対地速度(機首右向き+): 接地直前の対地速度ベクトルの機首直交成分
@@ -478,8 +496,8 @@ static void applyTouchdown(FlightState& L, const SimParams& prm, double sink, bo
         return;
     }
     if (band == 2) {                       // 着陸装置破損
-        L.broken = true;
-        L.brokenMsg = u8"着陸装置破損(沈下率過大)";
+        L.gearBroken = true;
+        L.failureMsg = u8"着陸装置破損(沈下率過大)";
     }
     L.ground = true; L.h = 0; L.gam = 0;   // 通常接地(バウンド時以外はgam即0=従来の簡略化を維持)
     if (sixdof) L.theta = 0;
@@ -507,6 +525,7 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
         L.x += std::max(0.0, L.V + prm.wind) * dt;
         L.t += dt;
         L.yl += prm.xwind * 0.3 * dt;      // 台車上は横流れ小
+        refreshOfficialDistance(L);
         L.n = lift / c.W;
         if (L.x >= 0) {                    // 前縁から飛び出し
             L.ground = false;
@@ -537,13 +556,16 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
         // 転がり摩擦: 滑走路0.02 / 砂利(富士川の滑走路矩形外)0.05 /
         // 着陸装置破損(第6弾)0.15=引きずり抵抗で滑走停止のみ
         bool onRwy = true;
+        bool onSandbar = false;
         if (fuji) {
-            // 滑走路再設計: 850m(z=10..860)×30m(半幅15m)
             const double xAbs = L.x - L.z0;
-            onRwy = std::abs(L.yl) <= 15.0 && xAbs >= -860.0 && xAbs <= -10.0;
+            onRwy = site::insideFujikawaRunway(xAbs, L.yl);
+            onSandbar = site::insideFujikawaSandbar(xAbs, L.yl);
         }
-        double rollMu = onRwy ? 0.02 : 0.05;
-        if (L.broken) rollMu = 0.15;
+        double rollMu = onRwy ? site::FUJI_RWY_MU
+                              : (onSandbar ? site::FUJI_SANDBAR_MU : site::FUJI_RIVERBED_MU);
+        if (!fuji) rollMu = onRwy ? 0.02 : 0.05;
+        if (L.gearBroken) rollMu = site::FUJI_BROKEN_GEAR_MU;
         const double normal = std::max(0.0, c.W - lift);
         const double roll = (rollMu + 0.40 * clamp(L.brake, 0.0, 1.0)) * normal;
         const double dV = (T - q * c.S * CDg - roll) / c.m;
@@ -584,6 +606,7 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
         L.x += (gs * std::cos(L.psi) - vSide * std::sin(L.psi)) * dt; L.t += dt;
         L.yl += (gs * std::sin(L.psi) + vSide * std::cos(L.psi)) * dt;
         L.rollDist += gs * dt;             // 累積滑走距離(自由方位のoverrun判定・表示用)
+        refreshOfficialDistance(L);
         // 接地時のバンクを凍結させず速やかに水平へ戻す
         L.phi -= L.phi * std::min(1.0, 5 * dt);
         L.n = lift / c.W;
@@ -597,7 +620,7 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
         // 引き起こし離陸はVs到達で可能(地面効果内はCLmax実効+数%あり引き剥がせる)。
         // フラップ展開時は失速速度が下がるぶん早くローテーションできる
         const double VsG = c.Vs * std::sqrt(c.CLmax / std::max(0.3, c.CLmax + c.flapDCLmax * L.flap));
-        if (!L.broken &&
+        if (!L.gearBroken &&
             ((lift >= c.W && (L.touchdowns == 0 || !tdGrace))
              || (!tdGrace && L.e > 0.25 && L.V >= VsG))) {
             L.ground = false;
@@ -610,22 +633,24 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
         } else if (fuji && insideWaterSite(prm, L.x - L.z0, L.yl)) {
             // 富士川: 滑走のまま川/海に突っ込んだら着水(方位自由化で全方向がありうる)
             L.splash = true; L.done = true; L.impact = "splash";
-        } else if (fuji && !L.touchdowns && L.rollDist > 1050) {
+        } else if (fuji && !L.touchdowns && L.rollDist > site::FUJI_OVERRUN_DISTANCE) {
             // 富士川の離陸失敗: 方位自由化で「滑走路端x到達」判定は成立しないため、
             // 「滑走距離1050mで離陸速度未達」に置換(滑走路850m+河川敷の余裕分200m)
-            L.overrun = true; L.done = true;
+            L.overrun = true; L.done = true; invalidateOfficialDistance(L);
         } else if (!fuji && (L.z0 - L.x) < 10) {
             // 琵琶湖(レガシー滑走路)従来判定: 滑走路端到達
-            if (!L.touchdowns) { L.overrun = true; L.done = true; }
+            if (!L.touchdowns) { L.overrun = true; L.done = true; invalidateOfficialDistance(L); }
             else { L.splash = true; L.done = true; L.impact = "splash"; }   // 滑走で水際を越えた
         }
-        else if (dV <= 0.005 && L.t > 20 && !L.touchdowns) { L.overrun = true; L.done = true; }
+        else if (dV <= 0.005 && L.t > 20 && !L.touchdowns) {
+            L.overrun = true; L.done = true; invalidateOfficialDistance(L);
+        }
         // 再着陸後に停止したら着陸成功として終了(推力があればV<=0.3に留まらない)
         else if (L.touchdowns && L.t - L.tdT > 3.0 && L.V <= 0.3) { L.landed = true; L.done = true; }
         return;
     }
     // ---- 破壊後: 揚力を失って落下 ----
-    if (L.broken) {
+    if (L.sparBroken) {
         L.phi += 0.7 * dt;                          // 錐もみ
         L.gam = std::max(-1.2, L.gam - 0.5 * dt);
         const double CDw = 0.08;
@@ -635,7 +660,11 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
         L.x += std::max(0.0, L.V * std::cos(L.gam) * std::cos(L.psi) + prm.wind) * dt;
         L.yl += (L.V * std::cos(L.gam) * std::sin(L.psi) + prm.xwind) * dt;
         L.t += dt; L.n = 0.2;
-        if (L.h <= 0) { L.splash = true; L.done = true; L.impact = "crash"; }
+        refreshOfficialDistance(L);
+        if (L.h <= 0) {
+            const bool onWater = insideWaterSite(prm, L.x - L.z0, L.yl);
+            L.splash = onWater; L.crashed = true; L.done = true; L.impact = "crash";
+        }
         return;
     }
     // 地形風(位置依存の加算風: 比良おろし・岸サーマル)
@@ -692,8 +721,8 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
         if (vr > 0.88) L.fatigue += (vr - 0.88) * (vr - 0.88) * 25.0 * dt;
         if (L.n > 0.8 * c.nFail) L.fatigue += (L.n / c.nFail - 0.8) * 0.8 * dt;
         if (L.fatigue >= 1.0) {
-            L.broken = true;
-            L.brokenMsg = u8"フラッター/繰返し荷重による主桁疲労破断";
+            L.sparBroken = true;
+            L.failureMsg = u8"フラッター/繰返し荷重による主桁疲労破断";
             return;
         }
     }
@@ -705,15 +734,15 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
         L.overNT += dt;
         if (L.overNT >= 0.15 || L.n > 1.15 * c.nFail) {
             std::snprintf(buf, sizeof(buf), u8"主桁折損(n=%.2f > 限界%.2f)", L.n, c.nFail);
-            L.broken = true; L.brokenMsg = buf; return;
+            L.sparBroken = true; L.failureMsg = buf; return;
         }
     } else {
         L.overNT = 0;
     }
-    if (L.n < c.nFailNeg) { L.broken = true; L.brokenMsg = u8"負荷重で主桁折損(押さえすぎ)"; return; }
+    if (L.n < c.nFailNeg) { L.sparBroken = true; L.failureMsg = u8"負荷重で主桁折損(押さえすぎ)"; return; }
     if (L.V > c.VNE) {
         std::snprintf(buf, sizeof(buf), u8"超過速度でフラッター破壊(V=%.1f > VNE %.1f m/s)", L.V, c.VNE);
-        L.broken = true; L.brokenMsg = buf; return;
+        L.sparBroken = true; L.failureMsg = buf; return;
     }
     // ---- 運動方程式(3自由度) ----
     const double dV = (T - q * c.S * CD) / c.m - c.g * std::sin(L.gam);
@@ -737,22 +766,26 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
     if (L.inThermal) L.inThermalUsed = true;
     // 乱流外乱
     const double turbVz = L.tz, turbVy = L.ty;
-    L.h = std::max(0.0, L.h + (L.V * std::sin(L.gam) + turbVz + L.thrmVz + twVz) * dt);
+    const double groundVz = L.V * std::sin(L.gam) + turbVz + L.thrmVz + twVz;
+    L.h = std::max(0.0, L.h + groundVz * dt);
     // ---- 接地判定 ----
-    if (L.h <= 0 && L.V * std::sin(L.gam) < 0) {
-        const double sink = -L.V * std::sin(L.gam);
+    if (L.h <= 0 && groundVz < 0) {
+        const double sink = -groundVz;
         const bool onLand = !insideWaterSite(prm, L.x - L.z0, L.yl);
         const bool rwMode = prm.mode == "runway";
-        if (rwMode && onLand && !L.broken) {
+        if (rwMode && onLand && !L.sparBroken) {
             // 第6弾: 滑走路モードの陸上接地は沈下率で品質分岐(通常/バウンド/装置破損/クラッシュ)
             // +クラブ着陸の残留横速度処理(共通ヘルパー)
             applyTouchdown(L, prm, sink, false);
-        } else if (!rwMode && c.hasGear && onLand && sink < 1.5 && std::abs(L.phi) < 0.25 && !L.broken) {
+        } else if (!rwMode && c.hasGear && onLand && sink < 1.5 && std::abs(L.phi) < 0.25 && !L.sparBroken) {
             // 琵琶湖(プラットフォーム系)の陸上接地: 従来判定を維持(第6弾の対象外)
             L.ground = true; L.h = 0; L.gam = 0; L.touchdowns++; L.tdT = L.t;
         } else {
-            L.splash = true; L.h = 0; L.done = true;
-            L.impact = (L.broken || (!onLand && sink > 1.5)) ? "crash" : (onLand ? "crash" : "splash");
+            L.h = 0; L.done = true;
+            L.splash = !onLand;
+            L.crashed = onLand || L.sparBroken || sink > 1.5;
+            L.impact = L.crashed ? "crash" : "splash";
+            if (L.crashed && L.failureMsg.empty()) L.failureMsg = u8"墜落";
         }
     }
     // 方位を±πに正規化
@@ -761,10 +794,11 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
     const double ws3 = windShear(L.h);   // 高度による風速勾配(10m基準)
     L.x += (vh * std::cos(L.psi) + prm.wind * ws3 + twW) * dt;
     L.yl += (vh * std::sin(L.psi) + prm.xwind * ws3 + twX + turbVy) * dt;
-    L.path += std::max(0.0, L.V) * std::cos(L.gam) * dt;
+    L.pathAir += std::max(0.0, L.V) * std::cos(L.gam) * dt;
+    refreshOfficialDistance(L);
     L.t += dt;
     if (std::abs(L.yl) > 2500 && !prm.funPlane) { L.offcourse = true; L.done = true; }   // お遊び機は自由飛行
-    if (L.t >= 3600 || L.path >= 30000) L.done = true;
+    if (L.t >= 3600 || L.officialDist >= 30000) L.done = true;
 }
 
 // ============ 6自由度モデル(実験) ============
@@ -774,7 +808,7 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
 //  - 失速はalpha超過でCL崩れ+機首下げ(ピッチブレーク)として現れる
 // 地上滑走・破壊後は標準モデルと同一処理に委譲する。
 void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, double dt) {
-    if (L.ground || L.broken) {
+    if (L.ground || L.sparBroken) {
         const bool wasGround = L.ground;
         stepSim(L, c, prm, dt);
         if (wasGround && !L.ground) {
@@ -836,8 +870,8 @@ void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, 
         if (vr > 0.88) L.fatigue += (vr - 0.88) * (vr - 0.88) * 25.0 * dt;
         if (L.n > 0.8 * c.nFail) L.fatigue += (L.n / c.nFail - 0.8) * 0.8 * dt;
         if (L.fatigue >= 1.0) {
-            L.broken = true;
-            L.brokenMsg = u8"フラッター/繰返し荷重による主桁疲労破断";
+            L.sparBroken = true;
+            L.failureMsg = u8"フラッター/繰返し荷重による主桁疲労破断";
             return;
         }
     }
@@ -847,15 +881,15 @@ void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, 
         L.overNT += dt;
         if (L.overNT >= 0.15 || L.n > 1.15 * c.nFail) {
             std::snprintf(buf, sizeof(buf), u8"主桁折損(n=%.2f > 限界%.2f)", L.n, c.nFail);
-            L.broken = true; L.brokenMsg = buf; return;
+            L.sparBroken = true; L.failureMsg = buf; return;
         }
     } else {
         L.overNT = 0;
     }
-    if (L.n < c.nFailNeg) { L.broken = true; L.brokenMsg = u8"負荷重で主桁折損(押さえすぎ)"; return; }
+    if (L.n < c.nFailNeg) { L.sparBroken = true; L.failureMsg = u8"負荷重で主桁折損(押さえすぎ)"; return; }
     if (L.V > c.VNE) {
         std::snprintf(buf, sizeof(buf), u8"超過速度でフラッター破壊(V=%.1f > VNE %.1f m/s)", L.V, c.VNE);
-        L.broken = true; L.brokenMsg = buf; return;
+        L.sparBroken = true; L.failureMsg = buf; return;
     }
 
     // ---- 抗力 ----
@@ -967,21 +1001,25 @@ void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, 
     // 地形風(位置依存の加算風)
     double twW = 0, twX = 0, twVz = 0;
     if (prm.terrainWind) localWind(prm, L.x - L.z0, L.yl, L.h, twW, twX, twVz);
-    L.h = std::max(0.0, L.h + (L.V * std::sin(L.gam) + L.tz + L.thrmVz + twVz) * dt);
+    const double groundVz = L.V * std::sin(L.gam) + L.tz + L.thrmVz + twVz;
+    L.h = std::max(0.0, L.h + groundVz * dt);
 
     // ---- 接地判定(標準と同一: 第6弾の品質分岐も共通ヘルパーで適用) ----
-    if (L.h <= 0 && L.V * std::sin(L.gam) < 0) {
-        const double sink = -L.V * std::sin(L.gam);
+    if (L.h <= 0 && groundVz < 0) {
+        const double sink = -groundVz;
         const bool onLand = !insideWaterSite(prm, L.x - L.z0, L.yl);
         const bool rwMode = prm.mode == "runway";
-        if (rwMode && onLand && !L.broken) {
+        if (rwMode && onLand && !L.sparBroken) {
             applyTouchdown(L, prm, sink, true);
-        } else if (!rwMode && c.hasGear && onLand && sink < 1.5 && std::abs(L.phi) < 0.25 && !L.broken) {
+        } else if (!rwMode && c.hasGear && onLand && sink < 1.5 && std::abs(L.phi) < 0.25 && !L.sparBroken) {
             // 琵琶湖(プラットフォーム系)の陸上接地: 従来判定を維持(第6弾の対象外)
             L.ground = true; L.h = 0; L.gam = 0; L.theta = 0; L.touchdowns++; L.tdT = L.t;
         } else {
-            L.splash = true; L.h = 0; L.done = true;
-            L.impact = (L.broken || (!onLand && sink > 1.5)) ? "crash" : (onLand ? "crash" : "splash");
+            L.h = 0; L.done = true;
+            L.splash = !onLand;
+            L.crashed = onLand || L.sparBroken || sink > 1.5;
+            L.impact = L.crashed ? "crash" : "splash";
+            if (L.crashed && L.failureMsg.empty()) L.failureMsg = u8"墜落";
         }
     }
     if (L.psi > PI) L.psi -= 2 * PI; else if (L.psi < -PI) L.psi += 2 * PI;
@@ -989,10 +1027,11 @@ void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, 
     const double ws6 = windShear(L.h);   // 高度による風速勾配(10m基準)
     L.x += (vh * std::cos(L.psi) + prm.wind * ws6 + twW) * dt;
     L.yl += (vh * std::sin(L.psi) + prm.xwind * ws6 + twX + L.ty) * dt;
-    L.path += std::max(0.0, L.V) * std::cos(L.gam) * dt;
+    L.pathAir += std::max(0.0, L.V) * std::cos(L.gam) * dt;
+    refreshOfficialDistance(L);
     L.t += dt;
     if (std::abs(L.yl) > 2500 && !prm.funPlane) { L.offcourse = true; L.done = true; }   // お遊び機は自由飛行
-    if (L.t >= 3600 || L.path >= 30000) L.done = true;
+    if (L.t >= 3600 || L.officialDist >= 30000) L.done = true;
 }
 
 } // namespace bm

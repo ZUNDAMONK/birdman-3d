@@ -2,6 +2,7 @@
 #include "core/Aircraft.hpp"
 #include "core/Physics.hpp"
 #include "core/Weather.hpp"
+#include "core/SiteConst.hpp"
 #include "ui/Theme.hpp"
 #include <cstdio>
 #include <cstdarg>
@@ -173,10 +174,10 @@ int Game::run() {
         {
             const bool flying = simActive_ && simWait_ <= 0 && !live_.done;
             audio_.update(flying, live_.V, live_.rpm, st_.propBlades, live_.ground);
-            if (simActive_ || wasBroken_ || prevTouchdowns_) {
-                if (live_.broken && !wasBroken_) audio_.onCrack();
+            if (simActive_ || wasSparBroken_ || prevTouchdowns_) {
+                if (live_.sparBroken && !wasSparBroken_) audio_.onCrack();
                 if (live_.touchdowns > prevTouchdowns_) audio_.onTouchdown();
-                wasBroken_ = live_.broken;
+                wasSparBroken_ = live_.sparBroken;
                 prevTouchdowns_ = live_.touchdowns;
             }
         }
@@ -194,7 +195,7 @@ int Game::run() {
             if (simActive_) {
                 if (simWait_ > 0) { fl = 0; fi = 1; }
                 else {
-                    fl = live_.broken ? 3.0 : live_.n;
+                    fl = live_.sparBroken ? 3.0 : live_.n;
                     fi = live_.ground ? 1.0 : live_.n;
                 }
             } else if (replayActive_) {
@@ -209,7 +210,7 @@ int Game::run() {
             double flDraw = flexFl_;
             // フラッター視覚化: VNE手前で翼が震え始める(疲労破断の前兆警告)。
             // 警告なので平滑化せず直接加算する
-            if (simActive_ && simWait_ <= 0 && !live_.ground && !live_.broken) {
+            if (simActive_ && simWait_ <= 0 && !live_.ground && !live_.sparBroken) {
                 const double vr = live_.V / liveC_.VNE;
                 if (vr > 0.85)
                     flDraw += (vr - 0.85) / 0.15 * 0.7 * std::sin(appT_ * 30);
@@ -292,7 +293,7 @@ void Game::placeForMode() {
         // startHdg(機首方位°)で待機位置・向きが変わる。ワールドz=850-startPos
         // (滑走路再設計: 850m, 南エンドz=10=RWY36, 北エンドz=860=RWY18)
         const bool fuji = prm_.site == "fujikawa";
-        const double rwyStart = fuji ? 850.0 - clamp(prm_.startPos, 0.0, 840.0) : RWY_START;
+        const double rwyStart = fuji ? site::fujikawaStartWorldZ(prm_.startPos) : RWY_START;
         const double hdg = fuji ? prm_.startHdg * PI / 180 : 0.0;
         acPos_ = {0, 0, rwyStart};
         cam_.target = {0, 2, rwyStart};
@@ -336,8 +337,8 @@ void Game::startSim() {
     liveC_ = prm_.funPlane ? funPlaneConstants(prm_) : aeroPack(st_, an_, prm_);
     const bool runway = prm_.mode == "runway";
     // 富士川: 自由発進位置(startPos)ぶん発進原点をずらす。startHdgはmakeInitialStateがpsiへ反映
-    prm_.startPos = clamp(prm_.startPos, 0.0, 840.0);
-    z0_ = runway ? (prm_.site == "fujikawa" ? 850.0 - prm_.startPos : RWY_START) : 0;
+    prm_.startPos = clamp(prm_.startPos, site::FUJI_START_POS_MIN, site::FUJI_START_POS_MAX);
+    z0_ = runway ? (prm_.site == "fujikawa" ? site::fujikawaStartWorldZ(prm_.startPos) : RWY_START) : 0;
     live_ = makeInitialState(liveC_, prm_, z0_);
     simRes_ = SimResult{};
     simRes_.out.push_back(simSample(live_));
@@ -350,7 +351,7 @@ void Game::startSim() {
     lastX_ = -99;
     simWait_ = 2;
     simActive_ = true;
-    wasBroken_ = false;
+    wasSparBroken_ = false;
     prevTouchdowns_ = 0;
     // パイロン周回コース(プラットフォーム発進のみ)
     courseLeg_ = runway ? -1 : 0;
@@ -379,7 +380,7 @@ void Game::stopSim() {
             // 中止=そこまでの距離が公式記録(実際の大会も着水/中断地点まで)
             const int wi = prm_.weather;
             courseMsg_ = career_.recordContest(wi >= 0 ? siteWeather(prm_.site)[wi].name : "-",
-                                               simActive_ ? live_.path : 0.0, contestCost_);
+                                               simActive_ ? live_.officialDist : 0.0, contestCost_);
             courseMsgTimer_ = 8;
             prm_ = prmBackup_;
             contestActive_ = false;
@@ -435,7 +436,7 @@ void Game::simTick() {
     // 見た目の右翼下げにするには描画回転は負にする(JS版からの符号バグを修正)
     acRot_ = {pitchAtt, -headAtt, -live_.phi};
     bool vis = !cam_.fpv;
-    if (live_.done && live_.splash && !live_.broken) vis = vis && (live_.frame % 6 < 4);
+    if (live_.done && live_.splash && !live_.crashed) vis = vis && (live_.frame % 6 < 4);
     acVisible_ = vis;
     cam_.fpvPose = {live_.yl, live_.h, zw, pitchAtt, headAtt, live_.phi};
     // ゴースト追従(同じ進行距離の地点)
@@ -475,7 +476,8 @@ void Game::simTick() {
 }
 
 void Game::finishSim() {
-    simRes_.dist = live_.path;
+    simRes_.dist = live_.officialDist;
+    simRes_.pathAir = live_.pathAir;
     simRes_.time = live_.t;
     simRes_.splash = live_.splash;
     simRes_.overrun = live_.overrun;
@@ -483,7 +485,10 @@ void Game::finishSim() {
     simRes_.rollDist = live_.rollDist;
     simRes_.landed = live_.landed;
     simRes_.touchdowns = live_.touchdowns;
-    simRes_.brkMsg = live_.brokenMsg;
+    simRes_.brkMsg = live_.failureMsg;
+    simRes_.sparBroken = live_.sparBroken;
+    simRes_.gearBroken = live_.gearBroken;
+    simRes_.crashed = live_.crashed;
     simRes_.auto_ = live_.auto_;
     simRes_.offcourse = live_.offcourse;
     simRes_.nogear = live_.nogear;
@@ -533,8 +538,10 @@ void Game::finishSim() {
         double bestRivalDist = 0;
         std::string bestRival;
         for (const auto& rv : rivals_) {
-            if (rv.L.path > simRes_.dist) rank++;
-            if (rv.L.path > bestRivalDist) { bestRivalDist = rv.L.path; bestRival = rv.name; }
+            if (rv.L.officialDist > simRes_.dist) rank++;
+            if (rv.L.officialDist > bestRivalDist) {
+                bestRivalDist = rv.L.officialDist; bestRival = rv.name;
+            }
         }
         const int wi = prm_.weather;
         const std::string wx = wi >= 0 ? siteWeather(prm_.site)[wi].name : "-";
@@ -549,7 +556,7 @@ void Game::finishSim() {
         prm_ = prmBackup_;
         contestActive_ = false;
     }
-    if (live_.splash || (live_.broken && live_.h <= 0.5)) {
+    if (live_.splash || live_.crashed || (live_.sparBroken && live_.h <= 0.5)) {
         const double cz = z0_ - live_.x;
         // 湖岸ポリゴンで水面/陸面を判定(東岸・対岸に到達した場合も正しく地面クラッシュに)
         const bool onLand = !insideWaterSite(prm_, live_.x - z0_, live_.yl);
@@ -582,7 +589,9 @@ static SimSample interpSample(const std::vector<SimSample>& out, double t) {
     SimSample s;
     s.t = t;
     s.x = lerp(a.x, b.x, u); s.h = lerp(a.h, b.h, u); s.V = lerp(a.V, b.V, u);
-    s.n = lerp(a.n, b.n, u); s.yl = lerp(a.yl, b.yl, u); s.path = lerp(a.path, b.path, u);
+    s.n = lerp(a.n, b.n, u); s.yl = lerp(a.yl, b.yl, u);
+    s.officialDist = lerp(a.officialDist, b.officialDist, u);
+    s.pathAir = lerp(a.pathAir, b.pathAir, u);
     s.gam = lerp(a.gam, b.gam, u); s.phi = lerp(a.phi, b.phi, u);
     s.psi = lerpAngle(a.psi, b.psi, u);
     return s;
@@ -836,8 +845,11 @@ bool Game::placeStartFromClick(float mx, float my, float W, float H) {
     if (t < 0 || t > 1) return false;
     const glm::dvec3 p = a + (b - a) * t;
     // 滑走路矩形(ワールド|x|<=15, z=10..860。850×30m再設計)内なら移動。横位置は中心線にスナップ
-    if (std::abs(p.x) > 15.0 || p.z < 10.0 || p.z > 860.0) return false;
-    prm_.startPos = clamp(850.0 - p.z, 0.0, 840.0);
+    if (std::abs(p.x) > site::FUJI_RWY_HALF_WIDTH
+        || p.z < site::FUJI_RWY_SOUTH_Z || p.z > site::FUJI_RWY_NORTH_Z)
+        return false;
+    prm_.startPos = clamp(site::FUJI_START_Z_BASE - p.z,
+                          site::FUJI_START_POS_MIN, site::FUJI_START_POS_MAX);
     placeForMode();
     return true;
 }
@@ -1136,10 +1148,13 @@ void Game::handleEvent(const sf::Event& ev) {
 }
 
 std::string Game::buildFinMsg() const {
-    if (simActive_ || simRes_.out.size() <= 1) return "";
+    if (simActive_ || simRes_.out.empty()) return "";
     char b[256];
     std::string fin;
-    if (!simRes_.brkMsg.empty()) fin = u8"[破損] " + simRes_.brkMsg + "  ";
+    if (simRes_.sparBroken)
+        fin = u8"[主桁破損] " + simRes_.brkMsg + "  ";
+    else if (simRes_.gearBroken)
+        fin = u8"[着陸装置破損] " + simRes_.brkMsg + "  ";
     if (simRes_.offcourse) {
         std::snprintf(b, sizeof(b), u8"コース逸脱で計測終了(距離 %.0f m)", simRes_.dist);
         fin += b;
@@ -1148,12 +1163,18 @@ std::string Game::buildFinMsg() const {
     } else if (simRes_.overrun) {
         // 富士川は方位自由化に伴い「滑走距離1050m」基準(琵琶湖レガシー滑走路は従来表記)
         if (prm_.site == "fujikawa")
-            std::snprintf(b, sizeof(b), u8"滑走距離1050mで離陸速度に届きません(到達 %.0f m)", simRes_.rollDist);
+            std::snprintf(b, sizeof(b), u8"滑走距離%.0fmで離陸速度に届きません(到達 %.0f m)",
+                          site::FUJI_OVERRUN_DISTANCE, simRes_.rollDist);
         else
             std::snprintf(b, sizeof(b), u8"滑走路2000m以内に離陸速度へ届きません(到達 %.0f m)", simRes_.dist);
         fin += b;
     } else if (simRes_.landed) {
         std::snprintf(b, sizeof(b), u8"着陸成功! 飛距離 %.0f m(接地 %d回)", simRes_.dist, simRes_.touchdowns);
+        fin += b;
+    } else if (simRes_.crashed) {
+        std::snprintf(b, sizeof(b), simRes_.splash
+                      ? u8"着水時に墜落。公式距離 %.0f m"
+                      : u8"墜落。公式距離 %.0f m", simRes_.dist);
         fin += b;
     } else if (simRes_.splash) {
         std::snprintf(b, sizeof(b), u8"着水! 飛距離 %.0f m", simRes_.dist);
@@ -1172,6 +1193,10 @@ std::string Game::buildFinMsg() const {
             std::snprintf(b, sizeof(b), simRes_.auto_ ? u8"性能計測: 飛距離 %.0f m(体力切れ)" : u8"時間切れ(%.0f m)", simRes_.dist);
             fin += b;
         }
+    }
+    if (simRes_.pathAir > 0) {
+        std::snprintf(b, sizeof(b), u8" / 対気経路 %.0f m", simRes_.pathAir);
+        fin += b;
     }
     if (lapTime_ > 0) {
         std::snprintf(b, sizeof(b), u8" / 北パイロン周回 %d分%04.1f秒", (int)(lapTime_ / 60), std::fmod(lapTime_, 60));
@@ -1328,7 +1353,7 @@ void Game::drawUI() {
             std::snprintf(rb, sizeof(rb), u8"リプレイ ×%.2g   %d:%04.1f / %d:%04.1f    距離 %.0f m  高度 %.1f m  対気 %.1f m/s",
                           eff, (int)(replayT_ / 60), std::fmod(replayT_, 60),
                           (int)(replayDur_ / 60), std::fmod(replayDur_, 60),
-                          replayS_.path, replayS_.h, replayS_.V);
+                          replayS_.officialDist, replayS_.h, replayS_.V);
             drawText(window_, font, rb, W / 2, barTop + 10, 13, theme::text(), 1, true);
             // 中央プログレスバー(テキスト行と分離してy=barTop+40に)
             drawPanelRect(window_, {W / 2 - 220, barTop + 40, 440, 8}, sf::Color(255, 255, 255, 50), sf::Color::Transparent, 0);
@@ -1374,7 +1399,7 @@ void Game::drawUI() {
             bDebrief_.draw(window_, font);
         }
         // 疲労警告(フラッター/高荷重の蓄積)
-        if (flying && !waiting && !live_.broken && live_.fatigue > 0.2) {
+        if (flying && !waiting && !live_.sparBroken && live_.fatigue > 0.2) {
             char fw[96];
             std::snprintf(fw, sizeof(fw), u8"! 主桁疲労 %.0f%% — 速度・荷重を下げろ", live_.fatigue * 100);
             pillText(fw, W / 2, 64, 16,
@@ -1391,8 +1416,8 @@ void Game::drawUI() {
         if (!rivals_.empty() && (flying || contestActive_)) {
             struct Row { double d; std::string n; unsigned col; };
             std::vector<Row> rows;
-            rows.push_back({simActive_ ? live_.path : simRes_.dist, u8"あなた", 0xE8590Cu});
-            for (const auto& rv : rivals_) rows.push_back({rv.L.path, rv.name, rv.color});
+            rows.push_back({simActive_ ? live_.officialDist : simRes_.dist, u8"あなた", 0xE8590Cu});
+            for (const auto& rv : rivals_) rows.push_back({rv.L.officialDist, rv.name, rv.color});
             std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.d > b.d; });
             float ry = 140;
             // 半透明白の背景板でまとめて視認性を確保
@@ -1433,14 +1458,14 @@ void Game::drawUI() {
         if (startPlaceActive() && !waiting) {
             // 滑走路残: 現在位置から機首方位に沿って滑走路矩形(|x|<=15, z=10..860)を
             // 出るまでの距離(レイと矩形境界の交差)。850×30mへ再設計
-            const double hz = 850.0 - prm_.startPos;
+            const double hz = site::fujikawaStartWorldZ(prm_.startPos);
             const double hr = prm_.startHdg * PI / 180;
             const double dx = std::sin(hr), dz = -std::cos(hr);
             double tMax = 1e9;
-            if (dx > 1e-9) tMax = std::min(tMax, 15.0 / dx);
-            else if (dx < -1e-9) tMax = std::min(tMax, -15.0 / dx);
-            if (dz > 1e-9) tMax = std::min(tMax, (860.0 - hz) / dz);
-            else if (dz < -1e-9) tMax = std::min(tMax, (10.0 - hz) / dz);
+            if (dx > 1e-9) tMax = std::min(tMax, site::FUJI_RWY_HALF_WIDTH / dx);
+            else if (dx < -1e-9) tMax = std::min(tMax, -site::FUJI_RWY_HALF_WIDTH / dx);
+            if (dz > 1e-9) tMax = std::min(tMax, (site::FUJI_RWY_NORTH_Z - hz) / dz);
+            else if (dz < -1e-9) tMax = std::min(tMax, (site::FUJI_RWY_SOUTH_Z - hz) / dz);
             const double remain = tMax > 1e8 ? 0.0 : std::max(0.0, tMax);
             char pb[160];
             std::snprintf(pb, sizeof(pb),
@@ -1480,11 +1505,11 @@ void Game::drawUI() {
             for (size_t i = 0; i < out.size(); i++) {
                 const auto& s = out[i];
                 if (i % step == 0) {
-                    sh.pts.push_back({s.path, s.h});
-                    sv.pts.push_back({s.path, s.V});
+                    sh.pts.push_back({s.officialDist, s.h});
+                    sv.pts.push_back({s.officialDist, s.V});
                 }
-                if (s.h > maxH) { maxH = s.h; maxHx = s.path; }
-                if (s.V > maxV) { maxV = s.V; maxVx = s.path; }
+                if (s.h > maxH) { maxH = s.h; maxHx = s.officialDist; }
+                if (s.V > maxV) { maxV = s.V; maxVx = s.officialDist; }
                 maxN = std::max(maxN, s.n);
                 if (s.V < simRes_.Vs && i > 0) stallT += out[i].t - out[i - 1].t;
             }

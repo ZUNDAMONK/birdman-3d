@@ -39,6 +39,9 @@ void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, 
 // 発進直前の初期状態を作る (JS startSim の L 初期化部)
 FlightState makeInitialState(const AircraftConstants& c, const SimParams& prm, double z0);
 
+// 現在の対地座標から公式直線距離を更新する。発進不成立時は常に0。
+void refreshOfficialDistance(FlightState& L);
+
 SimSample simSample(const FlightState& L);
 
 } // namespace bm

@@ -2,6 +2,7 @@
 #include "core/Aircraft.hpp"
 #include "core/Physics.hpp"
 #include "core/Weather.hpp"
+#include "core/SiteConst.hpp"
 #include "core/DesignIO.hpp"           // exeDirPath (assets読み込み)
 #include <SFML/Graphics/Image.hpp>     // PNG読み込み(第7弾: 画像素材)
 #include <glm/gtc/matrix_transform.hpp>
@@ -1110,7 +1111,10 @@ void Renderer3D::buildEnvFujikawa() {
     setColor(0x336840); drawGroundQuad(3500, 0.03, -2500, 4500, 12000);  // 西側の緑地(富士川緑地公園等の遠景)
     // 砂利地: 滑走路西側(格納庫・桜えび干し場の手前)に縮小(東側は川がすぐそこのため無し)
     setColor(0x2e5a38); drawGroundQuad(260, 0.045, 430, 560, 2700);
-    const double RWY_S = 10.0, RWY_N = 860.0, RWY_CZ = (RWY_S + RWY_N) / 2, RWY_LEN2 = (RWY_N - RWY_S) + 20;
+    const double RWY_S = site::FUJI_RWY_SOUTH_Z;
+    const double RWY_N = site::FUJI_RWY_NORTH_Z;
+    const double RWY_CZ = (RWY_S + RWY_N) / 2;
+    const double RWY_LEN2 = site::FUJI_RWY_LENGTH + 20;
     // 桜えび干し場・格納庫クラスタは滑走路の北端(RWY18側)寄り。850m再設計に伴い
     // 北端が1010→860へ150m短縮したため、クラスタ全体を-150ずらして新しい北端の
     // 手前に収める(はみ出し・エプロンとの重なりを避ける)。西端は滑走路の芝帯(〜30m)と
@@ -1164,7 +1168,7 @@ void Renderer3D::buildEnvFujikawa() {
     const double TR = 62.5;
     glBegin(GL_TRIANGLES);
     {
-        const glm::dvec3 a = toW(1400, -6000), b = toW(1400, 6000),
+        const glm::dvec3 a = toW(site::FUJI_SEA_START_X, -6000), b = toW(site::FUJI_SEA_START_X, 6000),
                          c2 = toW(14000, 6000), d = toW(14000, -6000);
         auto tv = [&](const glm::dvec3& p) {
             glTexCoord2d(p.x / TR, p.z / TR);
@@ -1172,18 +1176,11 @@ void Renderer3D::buildEnvFujikawa() {
         };
         tv(a); tv(b); tv(c2); tv(a); tv(c2); tv(d);
 
-        // 1000m滑走路の舗装端から約26m先を近岸とし、本流幅を約210mにする。
-        auto riverBanks = [](double x) {
-            const double nearB = -45;
-            double farB;
-            if (x < -200) farB = -255;
-            else farB = -255 + (-445) * clamp((x + 200) / 1500.0, 0.0, 1.0);
-            return std::make_pair(nearB, farB);
-        };
-        for (double xs = -8500; xs < 1400; xs += 350) {
-            const double xe = std::min(1400.0, xs + 350);
-            const auto [n0, f0] = riverBanks(xs);
-            const auto [n1, f1] = riverBanks(xe);
+        // 共有サイト定数から生成し、物理の水域境界と同じ岸線を使う。
+        for (double xs = site::FUJI_RIVER_UPSTREAM_X; xs < site::FUJI_SEA_START_X; xs += 350) {
+            const double xe = std::min(site::FUJI_SEA_START_X, xs + 350);
+            const double n0 = site::FUJI_RIVER_NEAR_BANK, f0 = site::fujikawaFarBank(xs);
+            const double n1 = site::FUJI_RIVER_NEAR_BANK, f1 = site::fujikawaFarBank(xe);
             const glm::dvec3 ra = toW(xs, n0), rb = toW(xs, f0),
                              rc = toW(xe, f1), rd = toW(xe, n1);
             tv(ra); tv(rb); tv(rc); tv(ra); tv(rc); tv(rd);
@@ -1194,19 +1191,18 @@ void Renderer3D::buildEnvFujikawa() {
     glDisable(GL_TEXTURE_2D);
 
     // 水面より高い砂州(川面の上に描画順で重ねる。湿った砂利色)
-    setColor(0x968b70);
-    drawGroundQuad(-180, 0.105, -750, 60, 100);
-    drawGroundQuad(-320, 0.106, -950, 80, 120);
-    drawGroundQuad(-220, 0.105, -1120, 55, 85);
-    drawGroundQuad(-380, 0.104, -1220, 70, 95);
-    const double barZ[5] = {120, 300, 470, 650, 820};
-    const double barW[5] = {40, 55, 60, 52, 36};
-    for (int i = 0; i < 5; i++) {
-        const double cx = -160 - ((i * 13) % 25);   // 川の中央寄り(近岸-45から100m以上離す)
+    for (size_t i = 5; i < site::FUJI_SANDBARS.size(); i++) {
+        const auto& bar = site::FUJI_SANDBARS[i];
+        setColor(0x968b70);
+        drawGroundQuad(bar.ylCenter, 0.105, -bar.courseXCenter, bar.ylWidth, bar.courseLength);
+    }
+    for (size_t i = 0; i < 5; i++) {
+        const auto& bar = site::FUJI_SANDBARS[i];
         setColor(0x7d775f);   // 濡れた縁(暗い砂利)
-        drawGroundQuad(cx, 0.099, barZ[i], barW[i] + 10, 64);
+        drawGroundQuad(bar.ylCenter, 0.099, -bar.courseXCenter, bar.ylWidth, bar.courseLength);
         setColor(0x968b70);   // 乾いた内側
-        drawGroundQuad(cx, 0.108, barZ[i], barW[i], 52);
+        drawGroundQuad(bar.ylCenter, 0.108, -bar.courseXCenter,
+                       bar.ylWidth - 10.0, bar.courseLength - 12.0);
     }
     glEnable(GL_LIGHTING);
 
@@ -1221,18 +1217,19 @@ void Renderer3D::buildEnvFujikawa() {
         const double RT = 10.0;
         glBegin(GL_TRIANGLES);
         glNormal3d(0, 1, 0);
-        glTexCoord2d(-15 / RT, RWY_S / RT); glVertex3d(-15, 0.06, RWY_S);
-        glTexCoord2d(-15 / RT, RWY_N / RT); glVertex3d(-15, 0.06, RWY_N);
-        glTexCoord2d(15 / RT, RWY_N / RT);  glVertex3d(15, 0.06, RWY_N);
-        glTexCoord2d(-15 / RT, RWY_S / RT); glVertex3d(-15, 0.06, RWY_S);
-        glTexCoord2d(15 / RT, RWY_N / RT);  glVertex3d(15, 0.06, RWY_N);
-        glTexCoord2d(15 / RT, RWY_S / RT);  glVertex3d(15, 0.06, RWY_S);
+        glTexCoord2d(-site::FUJI_RWY_HALF_WIDTH / RT, RWY_S / RT); glVertex3d(-site::FUJI_RWY_HALF_WIDTH, 0.06, RWY_S);
+        glTexCoord2d(-site::FUJI_RWY_HALF_WIDTH / RT, RWY_N / RT); glVertex3d(-site::FUJI_RWY_HALF_WIDTH, 0.06, RWY_N);
+        glTexCoord2d(site::FUJI_RWY_HALF_WIDTH / RT, RWY_N / RT);  glVertex3d(site::FUJI_RWY_HALF_WIDTH, 0.06, RWY_N);
+        glTexCoord2d(-site::FUJI_RWY_HALF_WIDTH / RT, RWY_S / RT); glVertex3d(-site::FUJI_RWY_HALF_WIDTH, 0.06, RWY_S);
+        glTexCoord2d(site::FUJI_RWY_HALF_WIDTH / RT, RWY_N / RT);  glVertex3d(site::FUJI_RWY_HALF_WIDTH, 0.06, RWY_N);
+        glTexCoord2d(site::FUJI_RWY_HALF_WIDTH / RT, RWY_S / RT);  glVertex3d(site::FUJI_RWY_HALF_WIDTH, 0.06, RWY_S);
         glEnd();
         glBindTexture(GL_TEXTURE_2D, 0);
         glDisable(GL_TEXTURE_2D);
         glEnable(GL_LIGHTING);
     } else {
-        setColor(0x6d7268); drawGroundQuad(0, 0.06, RWY_CZ, 30, RWY_N - RWY_S);
+        setColor(0x6d7268); drawGroundQuad(0, 0.06, RWY_CZ,
+                                          site::FUJI_RWY_HALF_WIDTH * 2, site::FUJI_RWY_LENGTH);
     }
     glDisable(GL_LIGHTING);
     setColor(0xd7d6cf);
