@@ -280,6 +280,10 @@ FlightState makeInitialState(const AircraftConstants& c, const SimParams& prm, d
     L.wbal = prm.wcap * 1000;
     L.Pnow = prm.auto_ ? c.CP : prm.P;
     L.z0 = z0;
+    // 気象ジッターとは別ストリームだが、同じweatherSeedなら同じDryden乱流系列になる。
+    // FlightStateがRNGを所有するため、プレイヤー/ライバルの更新順にも依存しない。
+    L.turbRng = (prm.weatherSeed ^ 0xA511E9B3u) ? (prm.weatherSeed ^ 0xA511E9B3u)
+                                                : 0x13579BDFu;
     if (runway && !c.hasGear) {
         L.done = true; L.overrun = true; L.nogear = true; L.officialInvalid = true;
     }
@@ -310,7 +314,14 @@ void stepTurbulence(FlightState& L, const SimParams& prm, double dt) {
     const double V = std::max(L.V, 2.0);
     const double tauW = clamp(L.h, 3.0, 60.0) / V;          // 鉛直成分
     const double tauV = clamp(2.0 * L.h, 8.0, 120.0) / V;   // 横成分
-    auto gauss = [] { return (frand() + frand() + frand() + frand() - 2.0) * 1.732; };
+    auto uniform = [&] {
+        unsigned x = L.turbRng ? L.turbRng : 0x13579BDFu;
+        x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+        L.turbRng = x;
+        return (x & 0x00ffffffu) / (double)0x01000000u;
+    };
+    auto gauss = [&] { return (uniform() + uniform() + uniform() + uniform() - 2.0)
+                             * 1.7320508075688772; };
     const double aW = std::min(1.0, dt / tauW), aV = std::min(1.0, dt / tauV);
     L.tz += -L.tz * aW + sig * std::sqrt(2 * aW) * gauss();
     L.ty += -L.ty * aV + 0.78 * sig * std::sqrt(2 * aV) * gauss();
@@ -506,6 +517,11 @@ static void applyTouchdown(FlightState& L, const SimParams& prm, double sink, bo
 void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, double dt) {
     const double q = 0.5 * c.rho * L.V * L.V;
     stepTurbulence(L, prm, dt);
+    // 乱流(連続有色ノイズ)と設定由来の短時間鉛直突風を同じ符号規約で合成。
+    // 上向き風+は迎角と揚力を増やし、3DOF/6DOFで同じΔCL=CLa·atan(w/V)を使う。
+    const double aeroGustVz = L.tz + prm.verticalGust;
+    const double gustAlpha = std::atan2(aeroGustVz, std::max(L.V, 3.0));
+    const double gustDCL = c.CLa * gustAlpha;
     stepThermal(L, prm);
     stepSteering(L, prm, dt);
     const double T = computeThrust(L, c, prm, dt);
@@ -514,7 +530,8 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
         // ---- プラットフォームのデッキ滑走(台車・下り3.5°・助走10m) ----
         // 後端x=-10(高10.6m)から前縁x=0(高10.0m)へ。重力の斜面成分で加速し、
         // 前縁を越えたら経路角-3.5°で空中へ。Sキーのブレーキで発進中止も可能
-        const double CLg = 0.8 + 0.3 * std::max(0.0, L.e) + 0.8 * c.flapDCL * L.flap;
+        const double CLg = clamp(0.8 + gustDCL + 0.3 * std::max(0.0, L.e)
+                               + 0.8 * c.flapDCL * L.flap, 0.05, c.CLmax);
         const double lift = q * c.S * CLg;
         const double CDg = c.CD0 + CLg * CLg / (PI * c.AR * c.e)
                          + c.flapDCD * L.flap * L.flap;   // 水面から10m上: 地面効果なし
@@ -546,7 +563,7 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
         // 地上滑走のCL: 主翼取付角由来のCLg0(aeroPackで算出)+エレベーター
         // (負=機首下げで揚力を抑えられる)+フラップ。従来の0.8固定を廃止し、
         // 取付角スライダーが離陸滑走距離に物理的に効くようにする
-        const double CLg = clamp(c.CLg0 + 0.35 * L.e + 0.8 * c.flapDCL * L.flap,
+        const double CLg = clamp(c.CLg0 + gustDCL + 0.35 * L.e + 0.8 * c.flapDCL * L.flap,
                                  0.05, (c.CLmax + c.flapDCLmax * L.flap) * 0.95);
         const double lift = q * c.S * CLg;
         const double CDg = c.CD0 + CLg * CLg / (PI * c.AR * c.e) * groundEffect(0, c.span)
@@ -692,7 +709,8 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
     // 鉛直速度フィードバックを0.10→0.16へ強化: 旧値では位相遅れが大きく、
     // エレベーター引きっぱなしで減衰しないフゴイド振動(V=5.8↔8.2の永久往復)に
     // 入っていた(診断で確認)。実機のフゴイドは弱いながら減衰する
-    double CL = CLl * std::min(1.0, (L.V / c.Vt) * (L.V / c.Vt)) + hold - 0.16 * Vz + c.elevAuth * L.e
+    double CL = CLl * std::min(1.0, (L.V / c.Vt) * (L.V / c.Vt)) + gustDCL
+              + hold - 0.16 * Vz + c.elevAuth * L.e
               + c.flapDCL * L.flap;
     CL = clamp(CL, 0.05, CLmaxE);
     // ---- 失速(ストール)挙動 ----
@@ -766,7 +784,7 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
     if (L.inThermal) L.inThermalUsed = true;
     // 乱流外乱
     const double turbVz = L.tz, turbVy = L.ty;
-    const double groundVz = L.V * std::sin(L.gam) + turbVz + L.thrmVz + twVz;
+    const double groundVz = L.V * std::sin(L.gam) + turbVz + prm.verticalGust + L.thrmVz + twVz;
     L.h = std::max(0.0, L.h + groundVz * dt);
     // ---- 接地判定 ----
     if (L.h <= 0 && groundVz < 0) {
@@ -844,22 +862,26 @@ void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, 
 
     // ---- 迎角と揚力 ----
     L.alpha = L.theta - L.gam;                          // トリム基準の迎角偏差
-    const double alphaG = L.tz / std::max(L.V, 3.0);    // 上昇突風による迎角増(突風荷重)
+    const double alphaG = std::atan2(L.tz + prm.verticalGust, std::max(L.V, 3.0));
     const double alphaAero = L.alpha + alphaG;
     // フラップ増分と地面効果の揚力側(実効CLmax・失速迎角が変わる)
     const double geL = 1 + 0.10 * (1 - groundEffect(L.h, c.span));
     const double CLmaxE = (c.CLmax + c.flapDCLmax * L.flap) * geL;
     const double astallE = c.astall
                          + ((c.flapDCLmax - c.flapDCL) * L.flap + (geL - 1) * c.CLmax) / c.CLa;
-    double CL = c.CLcruise + c.CLa * alphaAero + c.flapDCL * L.flap;
+    // 短時間突風の初期荷重は3DOFと同じ線形ΔCLを使う。失速判定は機体姿勢由来の
+    // 迎角に適用し、突風分はCLmaxまでの瞬間荷重として加える（ピッチモーメントは
+    // 下のalphaAeroで突風を含むため、その後の6DOF応答は維持される）。
+    double CL = c.CLcruise + c.CLa * L.alpha + c.flapDCL * L.flap;
     double stallPen = 0;
-    if (alphaAero > astallE) {
+    if (L.alpha > astallE) {
         // マッシュ(緩やかな失速): 実翼はCLmax超過後も揚力を大きくは失わない。
         // 急峻なCL崩壊は「揚力減→経路角低下→迎角増」の正帰還で深失速に
         // ロックする非物理挙動を生むため、緩勾配+強い機首下げで回復性を持たせる
-        stallPen = alphaAero - astallE;
+        stallPen = L.alpha - astallE;
         CL = std::max(0.55, CLmaxE - 0.25 * c.CLa * stallPen);
     }
+    CL += c.CLa * alphaG;
     CL = clamp(CL, -0.2, CLmaxE);
     const double lift = q * S * CL;
     L.n = lift / c.W;
@@ -1001,7 +1023,7 @@ void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, 
     // 地形風(位置依存の加算風)
     double twW = 0, twX = 0, twVz = 0;
     if (prm.terrainWind) localWind(prm, L.x - L.z0, L.yl, L.h, twW, twX, twVz);
-    const double groundVz = L.V * std::sin(L.gam) + L.tz + L.thrmVz + twVz;
+    const double groundVz = L.V * std::sin(L.gam) + L.tz + prm.verticalGust + L.thrmVz + twVz;
     L.h = std::max(0.0, L.h + groundVz * dt);
 
     // ---- 接地判定(標準と同一: 第6弾の品質分岐も共通ヘルパーで適用) ----

@@ -136,10 +136,6 @@ int Game::run() {
             designPanelWasOpen_ = openNow;
         }
 
-        // 環境更新(時刻進行・天候ゆらぎ)
-        if (appMode_ == "flight")
-            updateWeatherJitter(prm_, simActive_ && simWait_ <= 0 && !live_.done);
-
         // ジョイスティック/パッド対応: X=エルロン Y=エレベーター(反転) U/Z=ラダー
         // スティックが中立のときはキーボード操作を邪魔しない
         if (sf::Joystick::isConnected(0) && simActive_ && !live_.done && !live_.auto_) {
@@ -324,9 +320,13 @@ void Game::startSim() {
     if (prm_.summer) {
         // ミッション中は指定天候を固定(再抽選しない)
         if (missionActive_ < 0) prm_.weather = rollWeather(prm_.site);
-        prm_.dirJit = prm_.tempJit = 0;
+        prm_.dirJit = prm_.tempJit = prm_.wspdJit = prm_.gustJit = 0;
         applySummer(prm_);
     }
+    // 飛行ごとの環境シード。以後は固定物理刻みごとに更新するためfps/再生速度に依存しない。
+    // ライバルはbuildRivalsでこの状態をコピーし、同じ気象系列を受ける。
+    const unsigned weatherSeed = (unsigned)(frand() * 4294967295.0);
+    resetWeatherState(prm_, weatherSeed, true);
     // お遊び機は滑走路専用 → 富士川へ強制(琵琶湖に滑走路は無い)
     if (prm_.funPlane && prm_.site != "fujikawa") {
         prm_.site = "fujikawa";
@@ -407,6 +407,7 @@ void Game::simTick() {
         int guard = 0;
         while (live_.acc >= 0.02 && guard++ < 480 && !live_.done) {
             live_.acc -= 0.02;
+            updateWeatherJitter(prm_, true, 0.02);
             if (prm_.sixdof) stepSim6(live_, liveC_, prm_, 0.02);
             else stepSim(live_, liveC_, prm_, 0.02);
             if (live_.t - live_.lastSample >= 0.2) {
@@ -533,7 +534,10 @@ void Game::finishSim() {
     // ---- キャリア大会の結果記録(ライバルを完走させて順位確定) ----
     if (contestActive_) {
         for (auto& rv : rivals_)
-            while (!rv.L.done && rv.L.t < 3650) stepSim(rv.L, rv.c, rv.prm, 0.02);
+            while (!rv.L.done && rv.L.t < 3650) {
+                updateWeatherJitter(rv.prm, true, 0.02);
+                stepSim(rv.L, rv.c, rv.prm, 0.02);
+            }
         int rank = 1;
         double bestRivalDist = 0;
         std::string bestRival;
@@ -744,8 +748,11 @@ void Game::stepRivals() {
         if (r.L.done) continue;
         r.L.acc += prm_.speed * frameDt_;
         int guard = 0;
-        while (r.L.acc >= 0.02 && guard++ < 480 && !r.L.done)
-            { r.L.acc -= 0.02; stepSim(r.L, r.c, r.prm, 0.02); }
+        while (r.L.acc >= 0.02 && guard++ < 480 && !r.L.done) {
+            r.L.acc -= 0.02;
+            updateWeatherJitter(r.prm, true, 0.02);
+            stepSim(r.L, r.c, r.prm, 0.02);
+        }
     }
 }
 
