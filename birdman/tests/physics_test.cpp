@@ -290,11 +290,12 @@ int main() {
         p.summer = true; p.weather = 1; p.tod = 13.0;
         p.dirJit = p.tempJit = p.wspdJit = p.gustJit = 0;
         applySummer(p);
+        resetWeatherState(p, 0x12345678u, true);
         const double mean0 = p.wspdMean;
         double sum = 0, mx = 0, mn = 1e9;
         const int NF = 60 * 120;   // 2分間
         for (int i = 0; i < NF; i++) {
-            updateWeatherJitter(p, true);
+            updateWeatherJitter(p, true, 1.0 / 60.0);
             sum += p.wspd;
             mx = std::max(mx, p.wspd);
             mn = std::min(mn, p.wspd);
@@ -306,6 +307,104 @@ int main() {
         check(mx / std::max(0.1, mean0) > 1.15 && mx / std::max(0.1, mean0) < 2.1,
               "gust: gust factor 1.15-2.1 (not constant, not extreme)");
         check(mn < mean0 * 0.85, "gust: lulls exist below the mean");
+    }
+
+    // ---- Phase 2: 気象時間はfps/再生速度ではなくsim時間で決まる ----
+    {
+        struct WxStats { double tod, mean, var, maxVGust, temp; SimParams final; };
+        auto runWeather = [&](int fps, int speed) {
+            SimParams p = prm;
+            p.summer = true; p.weather = 1; p.tod = 10.0; p.speed = speed;
+            applySummer(p);
+            resetWeatherState(p, 0x51A7E123u, true);
+            const double launchTemp = p.temp;
+            const int targetSteps = 600 * 50;            // sim時間10分、固定刻み0.02s
+            int steps = 0;
+            double acc = 0, sum = 0, sum2 = 0, maxVG = 0;
+            while (steps < targetSteps) {
+                acc += speed / (double)fps;
+                while (acc + 1e-12 >= 0.02 && steps < targetSteps) {
+                    acc -= 0.02;
+                    updateWeatherJitter(p, true, 0.02);
+                    sum += p.wspd; sum2 += p.wspd * p.wspd;
+                    maxVG = std::max(maxVG, std::abs(p.verticalGust));
+                    steps++;
+                }
+            }
+            const double mean = sum / targetSteps;
+            WxStats out{p.tod, mean, sum2 / targetSteps - mean * mean, maxVG, p.temp, p};
+            check(near(p.temp, launchTemp, 1e-12), "weather: launch atmosphere stays fixed in flight");
+            return out;
+        };
+
+        const WxStats baseWx = runWeather(60, 1);
+        bool allSame = true;
+        for (int fps : {30, 60, 120}) for (int speed : {1, 10, 40}) {
+            const WxStats qx = runWeather(fps, speed);
+            allSame = allSame && near(qx.tod, baseWx.tod, 1e-10)
+                      && near(qx.mean, baseWx.mean, 1e-10)
+                      && near(qx.var, baseWx.var, 1e-10)
+                      && near(qx.maxVGust, baseWx.maxVGust, 1e-10);
+        }
+        std::printf("\n[weather dt] tod=%.3f mean=%.3f var=%.4f max|vertical gust|=%.2f\n",
+                    baseWx.tod, baseWx.mean, baseWx.var, baseWx.maxVGust);
+        check(allSame, "weather: 30/60/120fps and x1/x10/x40 share the same sim-time history");
+        check(near(baseWx.tod, 10.0 + 600.0 * 0.0048, 1e-9),
+              "weather: time-of-day advances from simulation seconds");
+        check(baseWx.var > 0.01 && baseWx.maxVGust > 0.25,
+              "weather: horizontal variability and short vertical gust events remain active");
+
+        // SimParamsのコピーは独立したRNG状態を持ち、更新順に左右されず同じ環境を再生する。
+        SimParams player = baseWx.final, rival = baseWx.final;
+        bool shared = true;
+        for (int i = 0; i < 1000; i++) {
+            updateWeatherJitter(player, true, 0.02);
+            updateWeatherJitter(rival, true, 0.02);
+            shared = shared && near(player.wspd, rival.wspd, 1e-12)
+                     && near(player.verticalGust, rival.verticalGust, 1e-12);
+        }
+        check(shared, "weather: copied player/rival environments replay the same seeded samples");
+    }
+
+    // ---- Phase 2: 垂直突風荷重を3DOF/6DOFで共通化 ----
+    {
+        auto gustLoad = [&](bool sixdof, double gustVz, double nFail) {
+            SimParams p = prm;
+            p.summer = false; p.turb = 0; p.thermal = 0; p.terrainWind = false;
+            p.verticalGust = gustVz; p.P = 0;
+            AircraftConstants cg = c;
+            cg.nFail = nFail; cg.nFailNeg = -100; cg.VNE = 40;
+            FlightState Lg = makeInitialState(cg, p, 0);
+            Lg.ground = false; Lg.h = 100; Lg.V = 12; Lg.gam = 0; Lg.t = 10;
+            Lg.liftoffT = -1e9;
+            if (sixdof) {
+                const double q = 0.5 * cg.rho * Lg.V * Lg.V;
+                const double clTrim = cg.W / (q * cg.S);
+                Lg.theta = (clTrim - cg.CLcruise) / cg.CLa;
+                Lg.init6 = true;
+                stepSim6(Lg, cg, p, 0.02);
+            } else {
+                stepSim(Lg, cg, p, 0.02);
+            }
+            return Lg;
+        };
+
+        const FlightState g30 = gustLoad(false, 0, 100);
+        const FlightState g31 = gustLoad(false, 1, 100);
+        const FlightState g33 = gustLoad(false, 3, 100);
+        const FlightState g60 = gustLoad(true, 0, 100);
+        const FlightState g61 = gustLoad(true, 1, 100);
+        const FlightState g63 = gustLoad(true, 3, 100);
+        const double d31 = g31.n - g30.n, d33 = g33.n - g30.n;
+        const double d61 = g61.n - g60.n, d63 = g63.n - g60.n;
+        std::printf("[vertical gust load] 3DOF n=%.2f/%.2f/%.2f  6DOF n=%.2f/%.2f/%.2f\n",
+                    g30.n, g31.n, g33.n, g60.n, g61.n, g63.n);
+        check(g31.n > g30.n && g33.n > g31.n, "3DOF: load rises monotonically at vertical gust 0/1/3m/s");
+        check(g61.n > g60.n && g63.n > g61.n, "6DOF: load rises monotonically at vertical gust 0/1/3m/s");
+        check(std::abs(d31 - d61) < 0.08 && std::abs(d33 - d63) < 0.08,
+              "vertical gust: 3DOF/6DOF initial load increments agree");
+        check(gustLoad(false, 3, 2.0).sparBroken && !gustLoad(false, 3, 10.0).sparBroken,
+              "vertical gust: weak spar breaks while strong spar survives");
     }
 
     // ---- 実機キャリブレーション: MIT Daedalus 88 相当の構成 ----
@@ -854,23 +953,39 @@ int main() {
     // ---- 動的サーマル場 ----
     {
         SimParams pt = prm; pt.thermal = 1.0; pt.realThermal = true;
-        const double v1 = thermalFieldVz(pt, 5000, 300, 100);
-        const double v2 = thermalFieldVz(pt, 5000, 300, 100);
+        pt.site = "biwa"; pt.wind = pt.xwind = pt.wspdMean = 0;
+        const double v1 = thermalFieldVz(pt, 5000, 4000, 100);
+        const double v2 = thermalFieldVz(pt, 5000, 4000, 100);
         check(near(v1, v2, 1e-12), "thermal field is deterministic");
-        double vmax = -9, vmin = 9;
+        double landMax = -9, waterMax = -9, vmin = 9;
         for (double x = 0; x < 6000; x += 60)
-            for (double y = -1500; y < 1500; y += 60) {
+            for (double y = 3300; y < 6000; y += 60) {
                 const double v = thermalFieldVz(pt, x, y, 200);
-                vmax = std::max(vmax, v); vmin = std::min(vmin, v);
+                landMax = std::max(landMax, v); vmin = std::min(vmin, v);
             }
-        std::printf("\n[realThermal] field range at t=200: [%.2f, %.2f] m/s\n", vmin, vmax);
-        check(vmax > 0.4, "active thermal cores exist");
+        for (double x = 0; x < 6000; x += 60)
+            for (double y = -1500; y < 1500; y += 60)
+                waterMax = std::max(waterMax, thermalFieldVz(pt, x, y, 200));
+        std::printf("\n[realThermal] landMax=%.2f waterMax=%.2f min=%.2f m/s\n",
+                    landMax, waterMax, vmin);
+        check(landMax > 0.4, "active thermal cores exist over land");
+        check(landMax > waterMax * 2.0 + 0.1, "strong thermal cores are suppressed over water");
         check(vmin > -0.2, "gentle sink between cells");
         // 時間経過でセルが入れ替わる
         double diff = 0;
         for (double x = 0; x < 4000; x += 200)
-            diff += std::abs(thermalFieldVz(pt, x, 0, 100) - thermalFieldVz(pt, x, 0, 700));
+            diff += std::abs(thermalFieldVz(pt, x, 4000, 100) - thermalFieldVz(pt, x, 4000, 700));
         check(diff > 0.3, "cells evolve over time");
+
+        // 同じ発生セルが平均風下へ移動することを可視化APIでも確認する。
+        double sx0[64], sy0[64], ss0[64], sr0[64];
+        double sx1[64], sy1[64], ss1[64], sr1[64];
+        SimParams adv = pt; adv.wspdMean = 2.0; adv.wdir = 180; // +x方向へ2m/s
+        const int n0 = thermalSitesNear(pt, 3000, 4000, 200, 64, sx0, sy0, ss0, sr0);
+        const int n1 = thermalSitesNear(adv, 3000, 4000, 200, 64, sx1, sy1, ss1, sr1);
+        bool advected = n0 > 0 && n0 == n1;
+        for (int i = 0; i < std::min(n0, n1); i++) advected = advected && sx1[i] > sx0[i] + 5.0;
+        check(advected, "thermal cells advect downwind at a deterministic rate");
     }
 
     // ---- 破壊テスト: 桁の弱い機体は高G旋回で折れる ----

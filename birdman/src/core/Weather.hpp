@@ -23,8 +23,12 @@ void applyWindVec(SimParams& prm);
 // 夏の琵琶湖: 時刻→気温・浜風・乱流・サーマルを自動設定
 void applySummer(SimParams& prm);
 
-// 毎フレームの環境更新(飛行中の時刻進行・天候ゆらぎ)。JSのupdateEnv前半
-void updateWeatherJitter(SimParams& prm, bool flying);
+// 発進時の気象状態を初期化する。seedが同じSimParams同士は同じ気象履歴になる。
+// lockAtmosphere=trueでは温度・密度など発進時に構築した空力定数を飛行中固定する。
+void resetWeatherState(SimParams& prm, unsigned seed, bool lockAtmosphere = true);
+
+// シミュレーション時間dtに基づく環境更新。描画fpsや再生速度には依存しない。
+void updateWeatherJitter(SimParams& prm, bool flying, double dt);
 
 // 時刻→空の色(空・霧の色。早朝=淡金、日中=青、夕=橙)。0-255 RGB
 void skyColor(double tod, int& r, int& g, int& b);

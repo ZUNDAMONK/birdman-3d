@@ -157,23 +157,97 @@ void applySummer(SimParams& prm) {
     applyWindVec(prm);
 }
 
-void updateWeatherJitter(SimParams& prm, bool flying) {
-    if (prm.summer && flying) {
-        prm.tod = std::min(18.0, prm.tod + 0.00008 * prm.speed);
+static unsigned weatherNext(SimParams& prm) {
+    unsigned x = prm.weatherRng ? prm.weatherRng : 0x6D2B79F5u;
+    x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+    prm.weatherRng = x;
+    return x;
+}
+
+static double weatherUniform(SimParams& prm) {
+    return (weatherNext(prm) & 0x00ffffffu) / (double)0x01000000u;
+}
+
+static double weatherGaussian(SimParams& prm) {
+    // 4個の一様乱数の和。平均0・分散1へ正規化した軽量な近似正規乱数。
+    return (weatherUniform(prm) + weatherUniform(prm) + weatherUniform(prm)
+          + weatherUniform(prm) - 2.0) * 1.7320508075688772;
+}
+
+static void stepOu(double& x, double tau, double sigma, double dt, SimParams& prm) {
+    const double a = std::exp(-std::max(0.0, dt) / std::max(0.05, tau));
+    x = a * x + sigma * std::sqrt(std::max(0.0, 1.0 - a * a)) * weatherGaussian(prm);
+}
+
+static unsigned weatherHash(unsigned seed, unsigned slot, unsigned k) {
+    unsigned h = seed ^ (slot * 0x9E3779B9u) ^ (k * 0x85EBCA6Bu);
+    h ^= h >> 16; h *= 0x7FEB352Du; h ^= h >> 15; h *= 0x846CA68Bu; h ^= h >> 16;
+    return h;
+}
+
+static double hashUnit(unsigned seed, unsigned slot, unsigned k) {
+    return (weatherHash(seed, slot, k) & 0x00ffffffu) / (double)0x01000000u;
+}
+
+static double verticalGustAt(unsigned seed, double t, double amplitude) {
+    if (amplitude <= 0 || t < 0) return 0;
+    // 8秒スロットごとに短い半正弦パルスを決定的に生成する。
+    // 連続有色ノイズの乱流とは役割を分け、上昇・下降突風を同確率にする。
+    const double slotSec = 8.0;
+    const unsigned slot = (unsigned)std::floor(t / slotSec);
+    double out = 0;
+    for (int back = 0; back <= 1; back++) {
+        if (slot < (unsigned)back) continue;
+        const unsigned s = slot - (unsigned)back;
+        if (hashUnit(seed, s, 0) > 0.55) continue;
+        const double start = s * slotSec + 0.4 + 4.6 * hashUnit(seed, s, 1);
+        const double duration = 0.8 + 1.7 * hashUnit(seed, s, 2);
+        if (t < start || t > start + duration) continue;
+        const double sign = hashUnit(seed, s, 3) < 0.5 ? -1.0 : 1.0;
+        const double peak = amplitude * (0.55 + 0.45 * hashUnit(seed, s, 4));
+        out += sign * peak * std::sin(PI * (t - start) / duration);
+    }
+    return clamp(out, -amplitude, amplitude);
+}
+
+void resetWeatherState(SimParams& prm, unsigned seed, bool lockAtmosphere) {
+    prm.weatherSeed = seed ? seed : 0xB17D5EEDu;
+    prm.weatherRng = prm.weatherSeed;
+    prm.weatherElapsed = 0;
+    prm.dirJit = prm.tempJit = prm.wspdJit = prm.gustJit = 0;
+    prm.verticalGust = 0;
+    prm.launchTemp = prm.temp;
+    prm.atmosphereLocked = lockAtmosphere;
+}
+
+void updateWeatherJitter(SimParams& prm, bool flying, double dt) {
+    if (!flying || dt <= 0) return;
+    prm.weatherElapsed += dt;
+
+    if (prm.summer) {
+        // 旧60fps時の進行率0.00008h/frameをsim秒へ換算。再生速度はGame側で
+        // sim秒の生成量だけを変え、同じsim経過時間なら同じ時刻になる。
+        static const double TOD_HOURS_PER_SIM_SECOND = 0.00008 * 60.0;
+        prm.tod = std::min(18.0, prm.tod + TOD_HOURS_PER_SIM_SECOND * dt);
         if (prm.weather >= 0) {
             const auto& list = siteWeather(prm.site);
             const WeatherPreset& wx = list[clamp(prm.weather, 0, (int)list.size() - 1)];
-            const double dj = wx.dirJit;
-            prm.dirJit = prm.dirJit * 0.98 + (frand() - 0.5) * dj * 0.06;
-            prm.tempJit = prm.tempJit * 0.99 + (frand() - 0.5) * 0.3;
-            // 遅い揺らぎ(τ≈30秒, σ≈0.2): 数十秒単位の吹き寄せ/凪
-            prm.wspdJit = clamp(prm.wspdJit * 0.9995 + (frand() - 0.5) * 0.024, -0.45, 0.45);
-            // 速い突風(τ≈2秒): 突風の立ち上がり。天候のgust係数で強弱
-            prm.gustJit = clamp(prm.gustJit * 0.992 + (frand() - 0.5) * 0.079 * (0.4 + 0.6 * wx.gust),
-                                -0.7, 0.7);
+            // 旧60fps係数と同程度の定常分散を、時定数τから求める正確なAR(1)へ置換。
+            stepOu(prm.dirJit, 0.83, 0.087 * wx.dirJit, dt, prm);
+            stepOu(prm.tempJit, 1.66, 0.61, dt, prm);
+            stepOu(prm.wspdJit, 33.3, 0.22, dt, prm);
+            stepOu(prm.gustJit, 2.08, 0.18 * (0.4 + 0.6 * wx.gust), dt, prm);
+            prm.wspdJit = clamp(prm.wspdJit, -0.45, 0.45);
+            prm.gustJit = clamp(prm.gustJit, -0.7, 0.7);
         }
+        const double launchTemp = prm.launchTemp;
         applySummer(prm);
+        // rho/Vs/Re/暑熱出力はaeroPackで発進時に構築されるため、飛行中は表示温度も
+        // 同じ値へ固定する。次回発進時に新しい時刻の温度で一括再構築される。
+        if (prm.atmosphereLocked) prm.temp = launchTemp;
     }
+
+    prm.verticalGust = verticalGustAt(prm.weatherSeed, prm.weatherElapsed, prm.gust);
 }
 
 void skyColor(double tod, int& r, int& g, int& b) {
@@ -204,17 +278,30 @@ static unsigned thHash(int i, int j, unsigned k) {
 static double thRand(int i, int j, unsigned k) {
     return (thHash(i, j, k) & 0xffffff) / (double)0x1000000;
 }
-// グリッドサイト(i,j)のセル: 中心・半径・ライフサイクル包絡(0=非アクティブ)
-static bool thCell(int i, int j, double t, double& cx, double& cyl, double& R, double& env) {
+// グリッドサイト(i,j)のセル: 発生源・半径・ライフサイクル・平均風移流。
+// 陸上発生を基準1、水上発生を0.12へ抑え、湖・川・海上の強い対流を防ぐ。
+static bool thCell(const SimParams& prm, int i, int j, double t,
+                   double& cx, double& cyl, double& R, double& env, double& surfaceFac) {
     const double G = 700.0;
-    cx = i * G + (thRand(i, j, 1) - 0.5) * 500;
-    cyl = j * G + (thRand(i, j, 2) - 0.5) * 500;
+    const double sourceX = i * G + (thRand(i, j, 1) - 0.5) * 500;
+    const double sourceY = j * G + (thRand(i, j, 2) - 0.5) * 500;
     R = 170 + thRand(i, j, 3) * 190;
     const double period = 420 + thRand(i, j, 4) * 240;   // 寿命サイクル7〜11分
     const double duty = 0.55;
     const double u = std::fmod(t / period + thRand(i, j, 5), 1.0);
     if (u >= duty) { env = 0; return false; }
     env = std::sin(PI * u / duty);                       // 湧く→ピーク→消える
+    surfaceFac = insideWaterSite(prm, sourceX, sourceY) ? 0.12 : 1.0;
+    const double age = u * period;
+    double meanWind = prm.wind, meanXwind = prm.xwind;
+    if (prm.wspdMean > 0.01) {
+        const double th = prm.wdir * PI / 180.0;
+        meanWind = prm.wspdMean * -std::cos(th);
+        meanXwind = prm.wspdMean * -std::sin(th);
+    }
+    static const double ADVECTION = 0.65;                // 境界層平均風の65%でセル中心を移流
+    cx = sourceX + meanWind * ADVECTION * age;
+    cyl = sourceY + meanXwind * ADVECTION * age;
     return true;
 }
 
@@ -222,14 +309,20 @@ double thermalFieldVz(const SimParams& prm, double x, double yl, double t) {
     if (prm.thermal <= 0) return 0;
     const double G = 700.0;
     const int ci = (int)std::floor(x / G + 0.5), cj = (int)std::floor(yl / G + 0.5);
-    double vz = -0.03 * prm.thermal;                     // セル間は弱い沈下域
-    for (int i = ci - 1; i <= ci + 1; i++)
-        for (int j = cj - 1; j <= cj + 1; j++) {
-            double cx, cyl, R, env;
-            if (!thCell(i, j, t, cx, cyl, R, env)) continue;
+    double vz = -0.01 * prm.thermal;
+    // 最大約1kmの移流を考慮して周囲7x7サイトを探索する。
+    for (int i = ci - 3; i <= ci + 3; i++)
+        for (int j = cj - 3; j <= cj + 3; j++) {
+            double cx, cyl, R, env, surfaceFac;
+            if (!thCell(prm, i, j, t, cx, cyl, R, env, surfaceFac)) continue;
             const double d2 = (x - cx) * (x - cx) + (yl - cyl) * (yl - cyl);
             const double s = R * 0.62;
-            vz += prm.thermal * (0.5 + 0.9 * thRand(i, j, 6)) * env * std::exp(-d2 / (2 * s * s));
+            const double core = std::exp(-d2 / (2 * s * s));
+            const double ringS = 2.4 * s;
+            const double ring = std::exp(-d2 / (2 * ringS * ringS));
+            // 0.17*(2.4^2)≈0.98なので、広い領域でコア上昇と周辺沈下がほぼ釣り合う。
+            const double shape = core - 0.17 * ring;
+            vz += prm.thermal * surfaceFac * (0.5 + 0.9 * thRand(i, j, 6)) * env * shape;
         }
     return vz;
 }
@@ -240,11 +333,11 @@ int thermalSitesNear(const SimParams& prm, double x, double yl, double t,
     const double G = 700.0;
     const int ci = (int)std::floor(x / G + 0.5), cj = (int)std::floor(yl / G + 0.5);
     int n = 0;
-    for (int i = ci - 4; i <= ci + 4 && n < maxN; i++)
-        for (int j = cj - 4; j <= cj + 4 && n < maxN; j++) {
-            double cx, cyl, R, env;
-            if (!thCell(i, j, t, cx, cyl, R, env)) continue;
-            const double str = prm.thermal * (0.5 + 0.9 * thRand(i, j, 6)) * env;
+    for (int i = ci - 5; i <= ci + 5 && n < maxN; i++)
+        for (int j = cj - 5; j <= cj + 5 && n < maxN; j++) {
+            double cx, cyl, R, env, surfaceFac;
+            if (!thCell(prm, i, j, t, cx, cyl, R, env, surfaceFac)) continue;
+            const double str = prm.thermal * surfaceFac * (0.5 + 0.9 * thRand(i, j, 6)) * env;
             if (str < 0.12) continue;
             sx[n] = cx; syl[n] = cyl; sstr[n] = str; srad[n] = R;
             n++;
@@ -391,7 +484,8 @@ void localWind(const SimParams& prm, double x, double yl, double h,
         // 河原サーマル: 砂利の河川敷(滑走路周辺の陸地)は対流が強い。
         // 陸上は安定層が高く、湖上(60m)より高い150mスケールで減衰
         if (prm.thermal > 0 && !insideWaterSite(prm, x, yl)) {
-            addVz += 0.8 * prm.thermal * clamp(h / 8.0, 0.3, 1.0)
+            // 動的セルが陸上発生を担うため、地形項は広域の弱い顕熱上昇だけに抑える。
+            addVz += 0.32 * prm.thermal * clamp(h / 8.0, 0.3, 1.0)
                    * (0.35 + 0.65 * std::exp(-h / 150.0));
         }
         return;
@@ -464,7 +558,7 @@ void localWind(const SimParams& prm, double x, double yl, double h,
     //  高高度は安定層で減衰=際限ない上昇を防ぐ)
     if (prm.thermal > 0) {
         const double te = clamp((yl - 1200) / 1800, 0.0, 1.0);
-        addVz += 0.55 * prm.thermal * te * clamp(h / 8.0, 0.3, 1.0)
+        addVz += 0.22 * prm.thermal * te * clamp(h / 8.0, 0.3, 1.0)
                * (0.35 + 0.65 * std::exp(-h / 70.0));
     }
 

@@ -65,6 +65,7 @@ struct SimParams {
     double pushV = 5.0;                  // プッシャー発進速度(滑走路モードの初速・対地)
     double wdir = 0, wspd = 0;
     double gust = 1.0, CLmax = 1.4, hTgt = 2.0;
+    double verticalGust = 0;             // 実行時の瞬間鉛直突風 m/s（上向き+）。gustは最大振幅
     int    speed = 1;
     std::string mode = "platform";      // platform / runway
     std::string site = "biwa";          // biwa / fujikawa
@@ -82,9 +83,16 @@ struct SimParams {
     bool   funPlane = false;            // お遊びモード: 小型プロペラ機(滑走路専用)
     // 夏モードの内部ゆらぎ (JSの simPrm._dirJit 等)
     double dirJit = 0, tempJit = 0, wspdJit = 0;
-    double gustJit = 0;                 // 速い突風成分(2-3秒スケール)
+    double gustJit = 0;                 // 水平風速の速い変動(2-3秒スケール、無次元)
     double wspdMean = 0;                // 10分平均相当の風速(表示用。wspdは瞬間値)
     int    weather = -1;                // BIWA_WEATHERのindex。-1=未抽選
+    // dt基準の決定的な気象更新。コピーしたSimParamsは同じシード・同じ経過時間なら
+    // 同じ履歴を生成するため、プレイヤーと大会ライバルで環境系列を共有できる。
+    unsigned weatherSeed = 0xB17D5EEDu;
+    unsigned weatherRng = 0xB17D5EEDu;
+    double weatherElapsed = 0;           // 発進後のシミュレーション経過秒
+    double launchTemp = 20;              // 発進時の大気温度（飛行中の空力定数と表示を固定）
+    bool atmosphereLocked = false;
     // 自由発進(富士川・滑走路モードのみ。琵琶湖プラットフォームは無視)
     // 滑走路再設計(850×30m, 南エンド=RWY36/海側 z=10, 北エンド=RWY18/内陸側 z=860):
     // デフォルトは南エンド(startPos=830)から北向き(startHdg=180)=
