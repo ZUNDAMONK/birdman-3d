@@ -1,4 +1,5 @@
 #include "game/Career.hpp"
+#include "core/Material.hpp"
 #include "core/Aircraft.hpp"
 #include "core/DesignIO.hpp"
 #include <fstream>
@@ -67,8 +68,8 @@ double Career::budget() const {
 
 std::vector<Career::CostItem> Career::costBreakdown(const AircraftParams& p, const Analysis& a) {
     std::vector<CostItem> v;
-    const double modFac = p.sparMod / 230;
-    v.push_back({u8"CFRP主桁", p.span * (p.rootDia + p.tipDia) / 2 / 1000 * modFac * modFac * 14});
+    const MaterialGrade& mat = materialOf(p.sparMat);
+    v.push_back({u8"CFRP主桁", (a.wSpar + a.wJoints) * 3.5 * mat.costFactor});
     v.push_back({u8"リブ・プランク", a.nRibs * 0.35 + a.S * ((p.plankTop + p.plankBot) / 2) / 100 * 1.6});
     v.push_back({u8"フィルム", a.S * 0.55});
     v.push_back({u8"プロペラ", (0.45 + p.propDia * 0.18) * (p.propMat == "carbon" ? 32 : 9) * (0.8 + 0.1 * p.propBlades)});
@@ -88,7 +89,7 @@ double Career::totalCost(const AircraftParams& p, const Analysis& a) {
 
 std::vector<std::string> Career::lockViolations(const AircraftParams& p) const {
     std::vector<std::string> v;
-    if (p.sparMod > 260 && st.rep < 2) v.push_back(u8"高弾性率CFRP(>260GPa)は評判2で解禁");
+    if (p.sparMat == "m40j" && st.rep < 2) v.push_back(u8"M40J高弾性CFRPは評判2で解禁");
     if (p.propMat == "carbon" && st.rep < 1) v.push_back(u8"CFRPプロペラは評判1で解禁");
     if (p.powerMax >= 320 && st.rep < 3) v.push_back(u8"エースパイロットは評判3で解禁");
     if (p.span > 32 && st.rep < 2) v.push_back(u8"翼幅32m超は評判2で解禁");

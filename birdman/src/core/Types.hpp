@@ -40,7 +40,8 @@ struct AircraftParams {
     std::string gear = "tandem";        // none / tandem / tri / mono
     // 桁
     int segments = 4;
-    double rootDia = 110, tipDia = 60, sparMod = 230;
+    double rootDia = 110, tipDia = 60;
+    std::string sparMat = "t700";       // t700 / t800 / m40j
     // 水平尾翼
     std::string hShape = "taper";       // rect / taper / ellipse / swept / delta
     double hSpan = 3.4, hChord = 0.6, tailArm = 5.0;
@@ -48,6 +49,7 @@ struct AircraftParams {
     std::string vShape = "swept";       // rect / swept / ellipse / delta / dorsal
     double vHeight = 1.3, vChord = 0.6;
     double elevRatio = 1.0, rudRatio = 1.0;
+    double boomDia = 80;                 // CFRPテールブーム外径 mm（肉厚=d/80）
     // テールビーム翼
     std::string boomWing = "none";      // none / LR / L / R
     double boomWingSpan = 1.0, boomWingChord = 0.3, boomWingPos = 0.5;
@@ -110,7 +112,10 @@ struct Analysis {
     double xCG = 0, xAC = 0, xNP = 0, SM = 0, Vh = 0, Vv = 0;
     double V = 0, Preq = 0, margin = 0;
     int    nRibs = 0;
-    double wSpar = 0, sparSF = 0;
+    double wSpar = 0, wJoints = 0, wBoom = 0, wGear = 0, wFairing = 0, wShaft = 0;
+    double sparSF = 0, failStation = 0;  // failStation: 半翼スパン比 0..1
+    std::string failMode;
+    double baseDih = 0, bendDih = 0;
     double fusLen = 0, xHT = 0, xVT = 0, xProp = 0, wingLE = 0;
     double pilotCGx = 0, lh = 0, driveDist = 0;
 };
@@ -141,6 +146,8 @@ struct AircraftConstants {
     double nFail = 2, VNE = 16;
     double nFailNeg = -0.5;              // 負荷重の折損限界(HPAはフィルム翼で-0.5G)
     double ailRate = 0, rudYaw = 0, rudRoll = 0, elevAuth = 0.65;
+    double failStation = 0;
+    std::string failMode;
     double CP = 270, Vdesign = 8, chordRef = 0.8, Vmp = 8, Pmin = 250;
     bool   hasGear = true;
     // stepSimが必要とする機体形状(JSはグローバルstを参照していた)
@@ -201,6 +208,8 @@ struct FlightState {
     bool   gearBroken = false;           // 着陸装置破損(高摩擦・再離陸禁止のみ)
     bool   crashed = false;              // 地面/水面への致命的衝突
     std::string failureMsg;
+    double failStation = 0;              // 実際に破断した半翼位置 0..1
+    std::string failMode;
     int    touchdowns = 0;
     double tdT = -1e9;                   // 直近の接地時刻(再離陸の猶予判定用)
     double maxBank = 0;
@@ -245,6 +254,8 @@ struct SimResult {
     bool   splash = false, overrun = false, offcourse = false, nogear = false;
     bool   landed = false;
     bool   sparBroken = false, gearBroken = false, crashed = false;
+    double failStation = 0;
+    std::string failMode;
     int    touchdowns = 0;
     double groundRoll = -1;
     double rollDist = 0;                 // 地上滑走の累積距離(overrunメッセージ用)
@@ -262,6 +273,8 @@ struct SimResult {
 struct LoadsResult {
     std::vector<double> ys, Lp, LpE, M, defl;
     double tip = 0, Mroot = 0, Mallow = 0, SF = 0;
+    double failStation = 0;
+    std::string failMode;
     double baseDih = 0, bendDih = 0, dihEff = 0;
 };
 

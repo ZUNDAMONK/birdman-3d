@@ -1,4 +1,5 @@
 #include "core/Aircraft.hpp"
+#include "core/Material.hpp"
 #include <cmath>
 #include <algorithm>
 #include <cstdio>
@@ -98,9 +99,17 @@ Analysis analyze(const AircraftParams& st) {
     const int nRibs = (int)std::floor(half / st.ribPitch) * 2;
     const double plankFrac = ((st.plankTop + st.plankBot + st.plankRearTop + st.plankRearBot) / 2) / 100;
     const double wRibs = nRibs * 0.042, wPlank = S * plankFrac * 0.26, wFilm = S * 2.05 * 0.034;
-    const double avgDia = (st.rootDia + st.tipDia) / 2;
-    const double wSpar = st.span * 0.004 * avgDia * (0.92 + 0.08 * st.sparMod / 230);
-    const double wJoints = (st.segments - 1) * 2 * 0.18;
+    const MaterialGrade& mat = materialOf(st.sparMat);
+    const double dr = st.rootDia / 1000.0, dt = st.tipDia / 1000.0;
+    // Linear-taper thin tube integrated over both half-wings; t=d/80.
+    const double wSpar = 2 * SPAR_MASS_CAL * mat.density * (PI / 80.0) * (half / 3.0)
+                       * (dr * dr + dr * dt + dt * dt);
+    double wJoints = 0;
+    for (int k = 1; k < std::max(1, st.segments); k++) {
+        const double u = k / (double)std::max(1, st.segments);
+        const double d = lerp(dr, dt, u), sleeveT = 1.5 * d / 80.0;
+        wJoints += 2 * mat.density * PI * d * sleeveT * 0.18;
+    }
     const double wAil = st.ailMode == "none" ? 0 : st.ailSpanFrac * st.span * 0.25 + 0.3;
     const double wFlap = st.flapSpanFrac > 0.01 ? st.flapSpanFrac * st.span * 0.22 + 0.2 : 0;
     const double wBoomWing = (st.boomWing != "none")
@@ -109,15 +118,23 @@ Analysis analyze(const AircraftParams& st) {
     const double wHT = Sh * 0.55 + (st.elevRatio < 1 ? 0.15 : 0.05);
     const double wVT = Sv * 0.55 + (st.rudRatio < 1 ? 0.12 : 0.05);
     const double boomLen = fusLen - (wingLE + MAC * 0.6);
-    const double wBoom = std::max(0.0, boomLen) * 0.32;
+    const double boomD = clamp(st.boomDia, 50.0, 120.0) / 1000.0;
+    const double wBoom = SPAR_MASS_CAL * mat.density * PI * boomD * (boomD / 80.0)
+                       * std::max(0.0, boomLen);
     const double wCockpit = 3.2 + (st.posture == "upright" ? 0.3 : 0.0);
     const double driveDist = std::abs(xProp - st.seatX) + (st.propConfig == "pylon" ? 1.2 : 0.0);
-    const double wDrive = 1.2 + driveDist * 0.35;
+    const double wShaft = st.drive == "shaft" ? 0.25 * driveDist : 0.0;
+    const double wDrive = 1.2 + driveDist * 0.35 + wShaft;
     const double wProp = (0.45 + st.propDia * 0.18) * (st.propMat == "carbon" ? 0.78 : 1.0)
                        * (0.8 + 0.1 * std::max(1, st.propBlades))
                        + (st.varPitch ? 0.6 : 0.0);   // 可変ピッチ機構(ハブ+リンク)
-    const double wMisc = 1.0;
-    const double wEmpty = wWing + wHT + wVT + wBoom + wCockpit + wDrive + wProp + wMisc;
+    const double wGear = st.gear == "tandem" ? 0.9 : st.gear == "tri" ? 1.4
+                       : st.gear == "mono" ? 0.6 : 0.0;
+    const double wFairing = st.fairing ? 1.1 : 0.0;
+    // 旧miscに含まれていた脚取付金具分0.3kgを明示的なgearへ移し、二重計上を避ける。
+    const double wMisc = 0.7;
+    const double wEmpty = wWing + wHT + wVT + wBoom + wCockpit + wDrive + wProp
+                        + wGear + wFairing + wMisc;
     const double W = (wEmpty + st.pilotW) * g;
     const double pilotCGx = st.seatX + (st.posture == "upright" ? -0.05 : st.posture == "semi" ? -0.15 : -0.25);
 
@@ -126,6 +143,7 @@ Analysis analyze(const AircraftParams& st) {
         {u8"主翼", wWing, xAC + 0.02 * MAC}, {u8"水平尾翼", wHT, xHT}, {u8"垂直尾翼", wVT, xVT},
         {u8"ブーム", wBoom, (wingLE + MAC * 0.6 + fusLen) / 2}, {u8"コックピット", wCockpit, st.seatX + 0.1},
         {u8"駆動系", wDrive, (st.seatX + xProp) / 2}, {u8"プロペラ", wProp, xProp},
+        {u8"着陸装置", wGear, st.seatX}, {u8"フェアリング", wFairing, st.seatX + 0.1},
         {u8"その他", wMisc, st.seatX}, {u8"パイロット", st.pilotW, pilotCGx}};
     double totalM = 0, moment = 0;
     for (const auto& it : a.items) { totalM += it.w; moment += it.w * it.x; }
@@ -147,18 +165,17 @@ Analysis analyze(const AircraftParams& st) {
                       : st.propConfig == "pusher" ? 0.92 : 0.96;
     const double Preq = propPowerFor(pt.J, pt.Ct, pt.Cp, st.propDia, rho, V, D, inst);
     const double margin = st.powerMax - Preq;
-    const double Mroot = 0.106 * (W - wWing * g) * st.span;
-    const double modFac = st.sparMod / 230;
-    const double Mallow = 0.0033 * std::pow(st.rootDia, 3) * modFac;
-    const double sparSF = Mallow / Mroot;
-
     a.S = S; a.MAC = MAC; a.AR = AR; a.Sh = Sh; a.Sv = Sv;
     a.wEmpty = wEmpty; a.W = W / g;
     a.xCG = xCG; a.xAC = xAC; a.xNP = xNP; a.SM = SM; a.Vh = Vh; a.Vv = Vv;
     a.V = V; a.Preq = Preq; a.margin = margin;
-    a.nRibs = nRibs; a.wSpar = wSpar; a.sparSF = sparSF;
+    a.nRibs = nRibs; a.wSpar = wSpar; a.wJoints = wJoints; a.wBoom = wBoom;
+    a.wGear = wGear; a.wFairing = wFairing; a.wShaft = wShaft;
     a.fusLen = fusLen; a.xHT = xHT; a.xVT = xVT; a.xProp = xProp; a.wingLE = wingLE;
     a.pilotCGx = pilotCGx; a.lh = lh; a.driveDist = driveDist;
+    const LoadsResult lr = computeLoads(st, a, 1.0);
+    a.sparSF = lr.SF; a.failStation = lr.failStation; a.failMode = lr.failMode;
+    a.baseDih = lr.baseDih; a.bendDih = lr.bendDih;
     return a;
 }
 
@@ -260,7 +277,7 @@ AeroConsts aeroConsts(const AircraftParams& st) {
 
 LoadsResult computeLoads(const AircraftParams& st, const Analysis& a, double n) {
     const double g = 9.81, half = st.span / 2;
-    const int N = 60;
+    const int N = 20;
     const double W = a.W * g * n, wWing = a.items[0].w;
     std::vector<double> ys(N + 1), cA(N + 1), cE(N + 1);
     for (int i = 0; i <= N; i++) {
@@ -291,7 +308,8 @@ LoadsResult computeLoads(const AircraftParams& st, const Analysis& a, double n) 
         Sh[i] = Sh[i + 1] + (net[i] + net[i + 1]) / 2 * dy;
         M[i] = M[i + 1] + (Sh[i + 1] + Sh[i]) / 2 * dy;
     }
-    const double E = 110e9;
+    const MaterialGrade& mat = materialOf(st.sparMat);
+    const double E = mat.young;
     std::vector<double> EI(N + 1);
     for (int i = 0; i <= N; i++) {
         double d = lerp(st.rootDia, st.tipDia, ys[i] / half) / 1000, tt = d / 80;
@@ -302,12 +320,56 @@ LoadsResult computeLoads(const AircraftParams& st, const Analysis& a, double n) 
         th[i] = th[i - 1] + (M[i - 1] / EI[i - 1] + M[i] / EI[i]) / 2 * dy;
         de[i] = de[i - 1] + (th[i - 1] + th[i]) / 2 * dy;
     }
-    const double Mallow = 0.0033 * std::pow(st.rootDia, 3);
+    double minSF = 1e9, failStation = 0, Mallow = 0;
+    std::string failMode = "bend";
+    for (int i = 0; i < N; i++) {
+        const double u = ys[i] / half;
+        const double d = lerp(st.rootDia, st.tipDia, u) / 1000.0, tt = d / 80.0;
+        const double I = PI * d * d * d * tt / 8.0;
+        double jointK = 1.0;
+        for (int k = 1; k < std::max(1, st.segments); k++) {
+            const double jy = half * k / (double)std::max(1, st.segments);
+            if (std::abs(ys[i] - jy) <= 0.15) jointK = 0.80;
+        }
+        const double bendStress = std::abs(M[i]) * (d / 2.0) / std::max(1e-12, I);
+        const double shearStress = 2.0 * std::abs(Sh[i]) / std::max(1e-12, PI * d * tt);
+        const double sfB = mat.compressive * CFRP_DESIGN_K * jointK / std::max(1.0, bendStress);
+        const double sfS = mat.shear * CFRP_DESIGN_K * jointK / std::max(1.0, shearStress);
+        if (sfB < minSF) {
+            minSF = sfB; failStation = u; failMode = "bend";
+            Mallow = std::abs(M[i]) * sfB;
+        }
+        if (sfS < minSF) {
+            minSF = sfS; failStation = u; failMode = "shear";
+            Mallow = std::abs(M[i]) * sfS;
+        }
+    }
+    // 20分割点の間にある接合部も中心位置で必ず評価する（許容値×0.80）。
+    for (int k = 1; k < std::max(1, st.segments); k++) {
+        const double y = half * k / (double)std::max(1, st.segments);
+        const double q = y / dy;
+        const int i0 = std::min(N - 1, std::max(0, (int)std::floor(q)));
+        const double f = clamp(q - i0, 0.0, 1.0);
+        const double Mi = lerp(M[i0], M[i0 + 1], f), Vi = lerp(Sh[i0], Sh[i0 + 1], f);
+        const double u = y / half, d = lerp(st.rootDia, st.tipDia, u) / 1000.0, tt = d / 80.0;
+        const double I = PI * d * d * d * tt / 8.0;
+        const double bendStress = std::abs(Mi) * (d / 2.0) / std::max(1e-12, I);
+        const double shearStress = 2.0 * std::abs(Vi) / std::max(1e-12, PI * d * tt);
+        const double sfB = mat.compressive * CFRP_DESIGN_K * 0.80 / std::max(1.0, bendStress);
+        const double sfS = mat.shear * CFRP_DESIGN_K * 0.80 / std::max(1.0, shearStress);
+        if (sfB < minSF) {
+            minSF = sfB; failStation = u; failMode = "bend"; Mallow = std::abs(Mi) * sfB;
+        }
+        if (sfS < minSF) {
+            minSF = sfS; failStation = u; failMode = "shear"; Mallow = std::abs(Mi) * sfS;
+        }
+    }
     const double baseDih = st.jig == "flat" ? 0 : st.dihedral;
     const double bendDih = th[N] * 180 / PI;
     LoadsResult r;
     r.ys = ys; r.Lp = Lp; r.LpE = LpE; r.M = M; r.defl = de;
-    r.tip = de[N]; r.Mroot = M[0]; r.Mallow = Mallow; r.SF = Mallow / M[0];
+    r.tip = de[N]; r.Mroot = M[0]; r.Mallow = Mallow; r.SF = minSF;
+    r.failStation = failStation; r.failMode = failMode;
     r.baseDih = baseDih; r.bendDih = bendDih; r.dihEff = baseDih + bendDih;
     return r;
 }
@@ -344,7 +406,7 @@ FlexBasis computeFlexBasis(const AircraftParams& st, const Analysis& a) {
     std::vector<double> Lp(N + 1), wp(N + 1);
     const double kL = W1 / (2 * trap(cS)), kw = wWing * g / (2 * trap(cA));
     for (int i = 0; i <= N; i++) { Lp[i] = cS[i] * kL; wp[i] = cA[i] * kw; }
-    const double E = 110e9;
+    const double E = materialOf(st.sparMat).young;
     std::vector<double> EI(N + 1);
     for (int i = 0; i <= N; i++) {
         const double d = lerp(st.rootDia, st.tipDia, ys[i] / half) / 1000, tt = d / 80;
@@ -529,9 +591,8 @@ GustResult gustCalc(const AircraftParams& st, const Analysis& a, const SimParams
     const double pushVa = prm.V0 - prm.wind;
     const double launchVa = std::sqrt(std::max(0.0, pushVa * std::abs(pushVa)
                                        + 2 * 9.81 * std::sin(3.5 * PI / 180) * 10));
-    LoadsResult r = computeLoads(st, a, 1);
     return {Vs, V, (V - Vs) / Vs * 100, launchVa, launchVa >= Vs * 1.05,
-            dA * 180 / PI, n, r.Mallow / (r.Mroot * n)};
+            dA * 180 / PI, n, a.sparSF / std::max(0.01, n)};
 }
 
 } // namespace bm

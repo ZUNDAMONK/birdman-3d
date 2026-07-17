@@ -1,5 +1,6 @@
 #include "core/DesignIO.hpp"
 #include "core/Aircraft.hpp"
+#include "core/Material.hpp"
 #include <fstream>
 #include <sstream>
 #include <cstdio>
@@ -89,12 +90,12 @@ std::string aircraftToJson(const AircraftParams& st) {
     str("drive", st.drive);
     num("driveEffPct", st.driveEffPct);
     str("gear", st.gear);
-    num("segments", st.segments); num("rootDia", st.rootDia); num("tipDia", st.tipDia); num("sparMod", st.sparMod);
+    num("segments", st.segments); num("rootDia", st.rootDia); num("tipDia", st.tipDia); str("sparMat", st.sparMat);
     str("hShape", st.hShape);
     num("hSpan", st.hSpan); num("hChord", st.hChord); num("tailArm", st.tailArm);
     str("vShape", st.vShape);
     num("vHeight", st.vHeight); num("vChord", st.vChord);
-    num("elevRatio", st.elevRatio); num("rudRatio", st.rudRatio);
+    num("elevRatio", st.elevRatio); num("rudRatio", st.rudRatio); num("boomDia", st.boomDia);
     str("boomWing", st.boomWing);
     num("boomWingSpan", st.boomWingSpan); num("boomWingChord", st.boomWingChord);
     num("boomWingPos", st.boomWingPos, false);
@@ -141,7 +142,13 @@ void aircraftFromJson(const std::string& s, AircraftParams& st) {
     st.segments = (int)std::lround(jNum(s, "segments", st.segments));
     st.rootDia = jNum(s, "rootDia", st.rootDia);
     st.tipDia = jNum(s, "tipDia", st.tipDia);
-    st.sparMod = jNum(s, "sparMod", st.sparMod);
+    const bool hasLegacySparMod = s.find("\"sparMod\":") != std::string::npos;
+    const double legacySparMod = jNum(s, "sparMod", 230.0);
+    const bool hasSparMat = s.find("\"sparMat\":\"") != std::string::npos;
+    st.sparMat = hasSparMat ? jStr(s, "sparMat", st.sparMat)
+                            : hasLegacySparMod ? materialFromLegacyMod(legacySparMod)
+                                               : st.sparMat;
+    st.sparMat = materialOf(st.sparMat).id; // unknown IDs safely fall back to T700
     st.hShape = jStr(s, "hShape", st.hShape);
     st.hSpan = jNum(s, "hSpan", st.hSpan);
     st.hChord = jNum(s, "hChord", st.hChord);
@@ -151,6 +158,7 @@ void aircraftFromJson(const std::string& s, AircraftParams& st) {
     st.vChord = jNum(s, "vChord", st.vChord);
     st.elevRatio = jNum(s, "elevRatio", st.elevRatio);
     st.rudRatio = jNum(s, "rudRatio", st.rudRatio);
+    st.boomDia = jNum(s, "boomDia", st.boomDia);
     st.boomWing = jStr(s, "boomWing", st.boomWing);
     st.boomWingSpan = jNum(s, "boomWingSpan", st.boomWingSpan);
     st.boomWingChord = jNum(s, "boomWingChord", st.boomWingChord);

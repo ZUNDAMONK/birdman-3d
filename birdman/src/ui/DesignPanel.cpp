@@ -108,6 +108,10 @@ void DesignPanel::build(AircraftParams* st, std::function<void()> onChange,
         T("taper5", u8"強テーパー・5分割", u8"最軽量級。接合精度が命", [](A& s) { s.segments = 5; s.rootDia = 115; s.tipDia = 45; }),
         T("ul", u8"超軽量・6分割", u8"強度マージン僅少(破壊注意)", [](A& s) { s.segments = 6; s.rootDia = 105; s.tipDia = 40; }),
         T("hd", u8"高強度・荒天対応", u8"突風でも折れにくい/重い", [](A& s) { s.segments = 4; s.rootDia = 130; s.tipDia = 75; })});
+    const int gSparMat = grp("sparMat", {
+        T("t700", u8"T700 標準高強度", u8"E=115GPa・圧縮650MPa・費用×1.0", [](A& s) { s.sparMat = "t700"; }),
+        T("t800", u8"T800 中間", u8"E=150GPa・圧縮700MPa・費用×1.4", [](A& s) { s.sparMat = "t800"; }),
+        T("m40j", u8"M40J 高弾性", u8"E=210GPa・圧縮450MPa・費用×1.9", [](A& s) { s.sparMat = "m40j"; })});
     const int gHt = grp("ht", {
         T("rect", u8"矩形", u8"製作容易", [](A& s) { s.hShape = "rect"; s.hSpan = 3.0; s.hChord = 0.55; }),
         T("taper", u8"テーパー", u8"軽量・標準", [](A& s) { s.hShape = "taper"; s.hSpan = 3.4; s.hChord = 0.6; }),
@@ -135,7 +139,7 @@ void DesignPanel::build(AircraftParams* st, std::function<void()> onChange,
     tplSel_ = {{"airfoil","dae31"},{"wing","taper"},{"jig","dihedral"},{"rib","std"},{"plank","std"},
                {"ail","none"},{"flap","none"},{"vpitch","fixed"},
                {"prop","tractor"},{"propMat","balsa"},{"pilot","semi"},{"drive","chain"},
-               {"gear","tandem"},{"spar","taper4"},{"ht","taper"},{"vt","swept"},{"elev","allmove"},
+               {"gear","tandem"},{"spar","taper4"},{"sparMat","t700"},{"ht","taper"},{"vt","swept"},{"elev","allmove"},
                {"rud","allmove"},{"fairing","off"},{"boomWing","none"}};
 
     // ボタンのonClick配線
@@ -202,13 +206,13 @@ void DesignPanel::build(AircraftParams* st, std::function<void()> onChange,
         segs.get = [p] { return (double)p->segments; };
         segs.set = [p](double v) { p->segments = (int)std::lround(v); };
         segs.onChange = onChange_;
-        sec(u8"⑦ CFRP主桁", {gSpar}, {
+        sec(u8"⑦ CFRP主桁", {gSpar, gSparMat}, {
             segs,
             mkSlider(u8"翼根径", &p->rootDia, 70, 150, 5, " mm"),
-            mkSlider(u8"翼端径", &p->tipDia, 30, 150, 5, " mm"),
-            mkSlider(u8"CFRP弾性率", &p->sparMod, 180, 320, 10, " GPa")},
+            mkSlider(u8"翼端径", &p->tipDia, 30, 150, 5, " mm")},
             [this, p] { const Analysis* a = getAn_(); char b[96];
-                std::snprintf(b, sizeof(b), u8"桁重量: %.1f kg / 接合 %d箇所×左右", a ? a->wSpar : 0.0, p->segments - 1); return std::string(b); });
+                std::snprintf(b, sizeof(b), u8"桁 %.1fkg + 接合 %.1fkg / 安全率 %.2f", a ? a->wSpar : 0.0,
+                              a ? a->wJoints : 0.0, a ? a->sparSF : 0.0); return std::string(b); });
     }
     sec(u8"⑧ 水平尾翼・エレベーター", {gHt, gElev}, {
         mkSlider(u8"尾翼アーム(主翼AC→尾翼)", &p->tailArm, 3.0, 8.0, 0.1, " m"),
@@ -219,7 +223,8 @@ void DesignPanel::build(AircraftParams* st, std::function<void()> onChange,
         mkSlider(u8"垂直尾翼高さ", &p->vHeight, 0.8, 2.2, 0.05, " m"),
         mkSlider(u8"垂直尾翼コード", &p->vChord, 0.35, 0.9, 0.05, " m"),
         mkSlider(u8"ラダー舵面比", &p->rudRatio, 0.2, 0.5, 0.05, "%", 100, [p] { return p->rudRatio < 1; })});
-    sec(u8"⑩ テールビーム翼", {gBoomWing}, {
+    sec(u8"⑩ テールブーム・ビーム翼", {gBoomWing}, {
+        mkSlider(u8"テールブーム径", &p->boomDia, 50, 120, 5, " mm"),
         mkSlider(u8"翼幅(片側)", &p->boomWingSpan, 0.3, 2.0, 0.1, " m", 1, [p] { return p->boomWing != "none"; }),
         mkSlider(u8"翼弦長", &p->boomWingChord, 0.15, 0.6, 0.05, " m", 1, [p] { return p->boomWing != "none"; }),
         mkSlider(u8"取付位置(0=翼付近/1=尾翼付近)", &p->boomWingPos, 0, 1, 0.05, "", 1, [p] { return p->boomWing != "none"; })});
