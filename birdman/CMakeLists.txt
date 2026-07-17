@@ -54,6 +54,7 @@ add_executable(physics_test
     src/core/Aircraft.cpp
     src/core/Physics.cpp
     src/core/Weather.cpp
+    src/core/DesignIO.cpp
 )
 target_include_directories(physics_test PRIVATE src)
 

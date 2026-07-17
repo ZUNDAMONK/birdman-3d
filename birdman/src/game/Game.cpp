@@ -487,6 +487,8 @@ void Game::finishSim() {
     simRes_.landed = live_.landed;
     simRes_.touchdowns = live_.touchdowns;
     simRes_.brkMsg = live_.failureMsg;
+    simRes_.failStation = live_.failStation;
+    simRes_.failMode = live_.failMode;
     simRes_.sparBroken = live_.sparBroken;
     simRes_.gearBroken = live_.gearBroken;
     simRes_.crashed = live_.crashed;

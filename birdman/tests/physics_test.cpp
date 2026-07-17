@@ -6,6 +6,8 @@
 #include "core/Physics.hpp"
 #include "core/Weather.hpp"
 #include "core/SiteConst.hpp"
+#include "core/Material.hpp"
+#include "core/DesignIO.hpp"
 #include <cstdio>
 #include <cmath>
 #include <cassert>
@@ -468,15 +470,15 @@ int main() {
     {
         AircraftParams s1, s2, s3;
         s2.rootDia = 90; s2.tipDia = 50;       // 細い桁
-        s3.sparMod = 160;                       // 低弾性率(安価な桁)
+        s3.sparMat = "m40j";                    // 高弾性材
         SimParams pv = prm;
         const double v1 = aeroPack(s1, analyze(s1), pv).VNE;
         const double v2 = aeroPack(s2, analyze(s2), pv).VNE;
         const double v3 = aeroPack(s3, analyze(s3), pv).VNE;
-        std::printf("\n[flutter VNE] default=%.1f thin-spar=%.1f cheap-spar=%.1f m/s\n", v1, v2, v3);
+        std::printf("\n[flutter VNE] default=%.1f thin-spar=%.1f high-modulus=%.1f m/s\n", v1, v2, v3);
         check(v1 > 13 && v1 < 20, "VNE: default spar ~16 m/s (matches original balance)");
         check(v2 < v1, "VNE: thinner spar lowers flutter limit");
-        check(v3 < v1, "VNE: lower modulus spar lowers flutter limit");
+        check(v3 > v1, "VNE: higher modulus material raises flutter limit");
         check(v2 >= 1.24 * analyze(s2).V, "VNE: never below 1.25x cruise (floor)");
     }
 
@@ -1034,6 +1036,106 @@ int main() {
         }
         check(strongCores > 0 && coresFound,
               "thermal: strong-wind advected cores remain inside the physics search");
+    }
+
+    // ---- Phase 3: CFRP材料・局所強度・質量・操舵接続 ----
+    {
+        const auto& mats = materialDB();
+        check(mats.size() == 3 && near(materialOf("t700").young, 115e9, 1.0)
+              && near(materialOf("t800").compressive, 700e6, 1.0)
+              && near(materialOf("m40j").density, 1600, 1e-12),
+              "phase3: CFRP grade table matches the approved SI values");
+
+        AircraftParams t700 = st, t800 = st, m40j = st;
+        t700.sparMat = "t700"; t800.sparMat = "t800"; m40j.sparMat = "m40j";
+        const Analysis a700 = analyze(t700), a800 = analyze(t800), a40 = analyze(m40j);
+        const AircraftConstants c700 = aeroPack(t700, a700, prm);
+        const AircraftConstants c800 = aeroPack(t800, a800, prm);
+        const AircraftConstants c40 = aeroPack(m40j, a40, prm);
+        std::printf("\n[phase3 material] t700 n=%.2f VNE=%.1f m=%.2f / t800 n=%.2f VNE=%.1f / m40j n=%.2f VNE=%.1f\n",
+                    c700.nFail, c700.VNE, a700.wEmpty, c800.nFail, c800.VNE,
+                    c40.nFail, c40.VNE);
+        check(c800.nFail > c700.nFail, "phase3: higher compressive allowable raises nFail");
+        check(c800.VNE > c700.VNE && c40.VNE > c800.VNE,
+              "phase3: higher Young's modulus raises VNE monotonically");
+        check(c40.nFail < c700.nFail, "phase3: high modulus does not masquerade as high strength");
+        check(near(a700.sparSF, c700.nFail, 1e-12),
+              "phase3: analysis spar SF exactly equals flight nFail");
+        check(near(c700.nFailNeg, -std::max(0.5, 0.6 * c700.nFail), 1e-12),
+              "phase3: negative structural limit derives from positive nFail");
+        check(a700.wEmpty >= 27.8 && a700.wEmpty <= 29.0
+              && c700.nFail >= 2.11 * 0.9 && c700.nFail <= 2.11 * 1.1
+              && c700.VNE >= 16.0 * 0.9 && c700.VNE <= 16.0 * 1.1,
+              "phase3: default mass/nFail/VNE remain inside Claude calibration bands");
+
+        AircraftParams thick = t700;
+        thick.rootDia *= 1.15; thick.tipDia *= 1.15;
+        const Analysis aThick = analyze(thick);
+        check(aThick.wSpar > a700.wSpar && aThick.sparSF > a700.sparSF,
+              "phase3: larger tube diameter raises both spar mass and strength");
+
+        AircraftParams tapered = t700;
+        tapered.rootDia = 135; tapered.tipDia = 30; tapered.segments = 2;
+        const Analysis aTaper = analyze(tapered);
+        std::printf("[phase3 local] tapered SF=%.2f station=%.2f mode=%s\n",
+                    aTaper.sparSF, aTaper.failStation, aTaper.failMode.c_str());
+        check(aTaper.failStation > 0.4,
+              "phase3: strong taper is governed by an outboard local station");
+
+        AircraftParams bare = st; bare.gear = "none"; bare.fairing = false; bare.drive = "chain";
+        AircraftParams geared = bare; geared.gear = "tandem";
+        AircraftParams faired = bare; faired.fairing = true;
+        AircraftParams shaft = bare; shaft.drive = "shaft";
+        const Analysis aBare = analyze(bare), aGear = analyze(geared);
+        const Analysis aFair = analyze(faired), aShaft = analyze(shaft);
+        check(near(aGear.wEmpty - aBare.wEmpty, 0.9, 1e-9)
+              && near(aFair.wEmpty - aBare.wEmpty, 1.1, 1e-9)
+              && near(aShaft.wEmpty - aBare.wEmpty, 0.25 * aShaft.driveDist, 1e-9),
+              "phase3: gear, fairing and shaft masses enter total mass once");
+        AircraftParams boomSmall = bare, boomLarge = bare;
+        boomSmall.boomDia = 50; boomLarge.boomDia = 120;
+        check(analyze(boomLarge).wBoom > analyze(boomSmall).wBoom * 4.0,
+              "phase3: boom diameter controls boom tube mass");
+
+        AircraftParams ailSmall = st, ailLarge = st;
+        ailSmall.ailMode = ailLarge.ailMode = "large";
+        ailSmall.ailSpanFrac = 0.15; ailSmall.ailChordFrac = 0.20;
+        ailLarge.ailSpanFrac = 0.40; ailLarge.ailChordFrac = 0.40;
+        const auto cAilSmall = aeroPack(ailSmall, analyze(ailSmall), prm);
+        const auto cAilLarge = aeroPack(ailLarge, analyze(ailLarge), prm);
+        AircraftParams tailSmall = st;
+        tailSmall.elevRatio = 0.3; tailSmall.rudRatio = 0.35;
+        const auto cTailSmall = aeroPack(tailSmall, analyze(tailSmall), prm);
+        check(cAilLarge.ailRate > cAilSmall.ailRate && cAilLarge.Clda > cAilSmall.Clda
+              && cTailSmall.elevAuth < c700.elevAuth && cTailSmall.Cmde < c700.Cmde
+              && cTailSmall.rudYaw < c700.rudYaw && cTailSmall.Cndr < c700.Cndr,
+              "phase3: control-surface dimensions scale 3DOF/6DOF authority coefficients");
+
+        AircraftParams old180, old230, old300;
+        aircraftFromJson("{\"sparMod\":180}", old180);
+        aircraftFromJson("{\"sparMod\":230}", old230);
+        aircraftFromJson("{\"sparMod\":300}", old300);
+        check(old180.sparMat == "t700" && old230.sparMat == "t800" && old300.sparMat == "m40j",
+              "phase3: legacy sparMod JSON migrates to approved material grades");
+        AircraftParams noMaterial;
+        aircraftFromJson("{\"span\":28}", noMaterial);
+        check(noMaterial.sparMat == "t700", "phase3: JSON without either material key keeps T700 default");
+        AircraftParams saved = st; saved.sparMat = "m40j"; saved.boomDia = 95;
+        AircraftParams loaded;
+        aircraftFromJson(aircraftToJson(saved), loaded);
+        check(loaded.sparMat == "m40j" && near(loaded.boomDia, 95, 1e-12),
+              "phase3: sparMat and boomDia survive JSON round-trip");
+
+        AircraftConstants breakC = c700;
+        breakC.nFail = 0.5;
+        FlightState broken = makeInitialState(breakC, prm, 0);
+        broken.ground = false; broken.h = 100; broken.V = breakC.Vt;
+        broken.t = 10; broken.liftoffT = -1e9;
+        stepSim(broken, breakC, prm, 0.02);
+        check(broken.sparBroken && near(broken.failStation, breakC.failStation, 1e-12)
+              && broken.failMode == breakC.failMode
+              && broken.failureMsg.find(u8"半翼") != std::string::npos,
+              "phase3: actual structural failure records station and mode in its message");
     }
 
     // ---- 破壊テスト: 桁の弱い機体は高G旋回で折れる ----

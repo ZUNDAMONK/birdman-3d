@@ -1,5 +1,6 @@
 #include "core/Physics.hpp"
 #include "core/Aircraft.hpp"
+#include "core/Material.hpp"
 #include "core/Weather.hpp"
 #include "core/SiteConst.hpp"
 #include <cmath>
@@ -92,28 +93,37 @@ AircraftConstants aeroPack(const AircraftParams& st, const Analysis& a, const Si
         const double P = propPowerFor(pt.J, pt.Ct, pt.Cp, st.propDia, rho, v, drag, propInst) / driveEff;
         if (P < Pmin) { Pmin = P; Vmp = v; }
     }
-    const LoadsResult lr1 = computeLoads(st, a, 1);
-    const double nFail = lr1.SF;
+    const double nFail = a.sparSF;
     // VNE: 桁のねじり剛性GJから求めるねじり発散/フラッター限界。
     // 一様翼の発散動圧 q_D = GJ·(π/2s)²/(c²·e_ac·a0)、軽量翼のフラッターは
-    // その手前(≈0.5·V_div)で起きる。太い桁・高弾性率ほどVNEが上がり、
+    // その手前で較正した実効限界。太い桁・高弾性率ほどVNEが上がり、
     // 細桁の軽量化はフラッター限界の低下という代償を払う
     double VNE;
     {
         const double d35 = lerp(st.rootDia, st.tipDia, 0.35) / 1000;   // 35%スパンの桁径
         const double tw = d35 / 80;                                    // 肉厚(computeLoadsと同仮定)
-        const double Espar = 110e9 * (st.sparMod / 230);
-        const double GJ = (Espar / 3.0) * 2 * PI * std::pow(d35 / 2, 3) * tw;   // 薄肉円管
+        const double Gspar = materialOf(st.sparMat).young * CFRP_G_OVER_E;
+        const double GJ = Gspar * 2 * PI * std::pow(d35 / 2, 3) * tw;   // 薄肉円管
         const double halfSpan = st.span / 2;
         const double qDiv = GJ * std::pow(PI / (2 * halfSpan), 2)
                           / (a.MAC * a.MAC * 0.15 * 5.7);              // e_ac=0.15c, a0=5.7/rad
         const double Vdiv = std::sqrt(2 * std::max(1.0, qDiv) / rho);
-        VNE = clamp(0.50 * Vdiv, 1.25 * a.V, 34.0);
+        // G=E/24の積層有効値に対する較正係数。標準機の16m/sを維持する。
+        VNE = clamp(1.38 * Vdiv, 1.25 * a.V, 34.0);
     }
     const double sg = prm.sens;
-    const double ailRate = (st.ailMode == "allmove" ? 9 : st.ailMode == "large" ? 7 : st.ailMode == "small" ? 4 : 0) * PI / 180 * sg;
-    const double rudYaw = 2.5 * PI / 180 * sg, rudRoll = 1.2 * PI / 180 * sg;
-    const double elevAuth = 0.65 * sg;
+    const double ailBase = (st.ailMode == "allmove" ? 9 : st.ailMode == "large" ? 7
+                         : st.ailMode == "small" ? 4 : 0) * PI / 180;
+    const double ailRefSpan = st.ailMode == "allmove" ? 0.20 : st.ailMode == "large" ? 0.25 : 0.15;
+    const double ailRefChord = st.ailMode == "allmove" ? 1.00 : st.ailMode == "large" ? 0.30 : 0.25;
+    const double ailFac = st.ailMode == "none" ? 0.0
+        : clamp((st.ailSpanFrac / ailRefSpan) * (st.ailChordFrac / ailRefChord), 0.4, 1.6);
+    const double elevFac = clamp((a.Vh / 0.46) * std::sqrt(std::max(0.0, st.elevRatio)), 0.5, 1.5);
+    const double rudFac = clamp((a.Vv / 0.0052) * std::sqrt(std::max(0.0, st.rudRatio)), 0.5, 1.5);
+    const double ailRate = ailBase * ailFac * sg;
+    const double rudYaw = 2.5 * PI / 180 * rudFac * sg;
+    const double rudRoll = 1.2 * PI / 180 * rudFac * sg;
+    const double elevAuth = 0.65 * elevFac * sg;
     const bool hasGear = st.gear != "none";
     const double gearCD = hasGear ? (st.gear == "tri" ? 0.0016 : st.gear == "tandem" ? 0.0007 : 0.0009) : 0.0;
 
@@ -130,6 +140,8 @@ AircraftConstants aeroPack(const AircraftParams& st, const Analysis& a, const Si
         c.CLg0 = clamp(CLa3D * (st.incidence + 5.0) * PI / 180.0, 0.2, CLmax * 0.9);
     }
     c.nFail = nFail; c.VNE = VNE;
+    c.nFailNeg = -std::max(0.5, 0.6 * nFail);
+    c.failStation = a.failStation; c.failMode = a.failMode;
     c.ailRate = ailRate; c.rudYaw = rudYaw; c.rudRoll = rudRoll; c.elevAuth = elevAuth;
     c.hasGear = hasGear; c.CP = st.powerMax;
     // 暑熱derating: 24℃超で0.6%/℃(最大12%)持続出力が落ちる。
@@ -190,8 +202,8 @@ AircraftConstants aeroPack(const AircraftParams& st, const Analysis& a, const Si
         // 飛行中はnに応じてstepSim6が毎ステップ再評価する(たわむ翼はロール安定が増す)
         c.Clp = -c.CLa / 8;
         c.Clda = ailRate * (-c.Clp) * b / (2 * Vdesign);
-        c.dihBase = lr1.baseDih; c.dihBend = lr1.bendDih;
-        c.Clb = c.CLa * clamp(lr1.baseDih + lr1.bendDih, -2.0, 15.0) * PI / 180 / 4;   // 1g値
+        c.dihBase = a.baseDih; c.dihBend = a.bendDih;
+        c.Clb = c.CLa * clamp(a.baseDih + a.bendDih, -2.0, 15.0) * PI / 180 / 4;   // 1g値
         c.Cldr = rudRoll * (-c.Clp) * b / (2 * Vdesign);
         // ヨー: 垂直尾翼容積による復元・減衰、ラダー(3DOFのrudYawと定常率一致)
         const double ARv = 1.55 * st.vHeight / std::max(0.1, st.vChord);   // 端板効果込み
@@ -325,6 +337,17 @@ void stepTurbulence(FlightState& L, const SimParams& prm, double dt) {
     const double aW = std::min(1.0, dt / tauW), aV = std::min(1.0, dt / tauV);
     L.tz += -L.tz * aW + sig * std::sqrt(2 * aW) * gauss();
     L.ty += -L.ty * aV + 0.78 * sig * std::sqrt(2 * aV) * gauss();
+}
+
+static void markSparFailure(FlightState& L, const AircraftConstants& c,
+                            const std::string& reason) {
+    L.sparBroken = true;
+    L.failStation = c.failStation;
+    L.failMode = c.failMode;
+    const char* mode = c.failMode == "shear" ? u8"せん断" : u8"曲げ";
+    char loc[96];
+    std::snprintf(loc, sizeof(loc), u8" [%s・半翼%.0f%%位置]", mode, c.failStation * 100.0);
+    L.failureMsg = reason + loc;
 }
 
 double thermalCellVz(const SimParams& prm, double x, double yl) {
@@ -739,8 +762,7 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
         if (vr > 0.88) L.fatigue += (vr - 0.88) * (vr - 0.88) * 25.0 * dt;
         if (L.n > 0.8 * c.nFail) L.fatigue += (L.n / c.nFail - 0.8) * 0.8 * dt;
         if (L.fatigue >= 1.0) {
-            L.sparBroken = true;
-            L.failureMsg = u8"フラッター/繰返し荷重による主桁疲労破断";
+            markSparFailure(L, c, u8"フラッター/繰返し荷重による主桁疲労破断");
             return;
         }
     }
@@ -752,15 +774,15 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
         L.overNT += dt;
         if (L.overNT >= 0.15 || L.n > 1.15 * c.nFail) {
             std::snprintf(buf, sizeof(buf), u8"主桁折損(n=%.2f > 限界%.2f)", L.n, c.nFail);
-            L.sparBroken = true; L.failureMsg = buf; return;
+            markSparFailure(L, c, buf); return;
         }
     } else {
         L.overNT = 0;
     }
-    if (L.n < c.nFailNeg) { L.sparBroken = true; L.failureMsg = u8"負荷重で主桁折損(押さえすぎ)"; return; }
+    if (L.n < c.nFailNeg) { markSparFailure(L, c, u8"負荷重で主桁折損(押さえすぎ)"); return; }
     if (L.V > c.VNE) {
         std::snprintf(buf, sizeof(buf), u8"超過速度でフラッター破壊(V=%.1f > VNE %.1f m/s)", L.V, c.VNE);
-        L.sparBroken = true; L.failureMsg = buf; return;
+        markSparFailure(L, c, buf); return;
     }
     // ---- 運動方程式(3自由度) ----
     const double dV = (T - q * c.S * CD) / c.m - c.g * std::sin(L.gam);
@@ -892,8 +914,7 @@ void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, 
         if (vr > 0.88) L.fatigue += (vr - 0.88) * (vr - 0.88) * 25.0 * dt;
         if (L.n > 0.8 * c.nFail) L.fatigue += (L.n / c.nFail - 0.8) * 0.8 * dt;
         if (L.fatigue >= 1.0) {
-            L.sparBroken = true;
-            L.failureMsg = u8"フラッター/繰返し荷重による主桁疲労破断";
+            markSparFailure(L, c, u8"フラッター/繰返し荷重による主桁疲労破断");
             return;
         }
     }
@@ -903,15 +924,15 @@ void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, 
         L.overNT += dt;
         if (L.overNT >= 0.15 || L.n > 1.15 * c.nFail) {
             std::snprintf(buf, sizeof(buf), u8"主桁折損(n=%.2f > 限界%.2f)", L.n, c.nFail);
-            L.sparBroken = true; L.failureMsg = buf; return;
+            markSparFailure(L, c, buf); return;
         }
     } else {
         L.overNT = 0;
     }
-    if (L.n < c.nFailNeg) { L.sparBroken = true; L.failureMsg = u8"負荷重で主桁折損(押さえすぎ)"; return; }
+    if (L.n < c.nFailNeg) { markSparFailure(L, c, u8"負荷重で主桁折損(押さえすぎ)"); return; }
     if (L.V > c.VNE) {
         std::snprintf(buf, sizeof(buf), u8"超過速度でフラッター破壊(V=%.1f > VNE %.1f m/s)", L.V, c.VNE);
-        L.sparBroken = true; L.failureMsg = buf; return;
+        markSparFailure(L, c, buf); return;
     }
 
     // ---- 抗力 ----

@@ -1,4 +1,5 @@
 #include "ui/DesignTools.hpp"
+#include "core/Material.hpp"
 #include "ui/Theme.hpp"
 #include "core/Aircraft.hpp"
 #include <cstdio>
@@ -219,7 +220,8 @@ void DesignTools::draw(sf::RenderTarget& rt, HUD& hud, float W, float H) {
         drawText(rt, font, b, p.left + 12, p.top + 108, 11, INK);
         std::snprintf(b, sizeof(b), u8"根元曲げ %.0f N·m / 許容 %.0f N·m", r.Mroot, r.Mallow);
         drawText(rt, font, b, p.left + 12, p.top + 126, 11, INK);
-        std::snprintf(b, sizeof(b), u8"桁安全率 %.2f @%.1fG", r.SF, loadN_);
+        std::snprintf(b, sizeof(b), u8"桁安全率 %.2f @%.1fG (%s・半翼%.0f%%)", r.SF, loadN_,
+                      r.failMode == "shear" ? u8"せん断" : u8"曲げ", r.failStation * 100.0);
         drawText(rt, font, b, p.left + 12, p.top + 144, 12,
                  r.SF >= 1.5 ? OKC : r.SF >= 1 ? WARNC : BADC, 0, true);
         // チャート
@@ -413,7 +415,8 @@ void DesignTools::exportJsUrl() {
         "\"mode\":\"%s\",\"ailSpanFrac\":%g,\"ailChordFrac\":%g,"
         "\"config\":\"%s\",\"propDia\":%g,\"propBlades\":%d,\"propMat\":\"%s\","
         "\"posture\":\"%s\",\"seatX\":%g,\"pilotW\":%g,\"cd0Add\":%g,\"powerMax\":%g,"
-        "\"fairing\":%s,\"gear\":\"%s\",\"segments\":%d,\"rootDia\":%g,\"tipDia\":%g,\"sparMod\":%g,"
+        "\"fairing\":%s,\"gear\":\"%s\",\"segments\":%d,\"rootDia\":%g,\"tipDia\":%g,"
+        "\"sparMat\":\"%s\",\"sparMod\":%g,\"boomDia\":%g,"
         "\"drive\":\"%s\",\"driveEffPct\":%g,"
         "\"hShape\":\"%s\",\"hSpan\":%g,\"hChord\":%g,\"tailArm\":%g,"
         "\"vShape\":\"%s\",\"vHeight\":%g,\"vChord\":%g,\"elevRatio\":%g,\"rudRatio\":%g}}",
@@ -423,7 +426,8 @@ void DesignTools::exportJsUrl() {
         s.ailMode.c_str(), s.ailSpanFrac, s.ailChordFrac,
         s.propConfig.c_str(), s.propDia, s.propBlades, s.propMat.c_str(),
         s.posture.c_str(), s.seatX, s.pilotW, s.cd0Add, s.powerMax,
-        s.fairing ? "true" : "false", s.gear.c_str(), s.segments, s.rootDia, s.tipDia, s.sparMod,
+        s.fairing ? "true" : "false", s.gear.c_str(), s.segments, s.rootDia, s.tipDia,
+        s.sparMat.c_str(), materialOf(s.sparMat).young / 1e9, s.boomDia,
         s.drive.c_str(), s.driveEffPct,
         s.hShape.c_str(), s.hSpan, s.hChord, s.tailArm,
         s.vShape.c_str(), s.vHeight, s.vChord, s.elevRatio, s.rudRatio);
