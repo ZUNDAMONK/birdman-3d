@@ -1,6 +1,7 @@
 #include "core/Weather.hpp"
 #include "core/Physics.hpp"
 #include "core/Aircraft.hpp"
+#include "core/SiteConst.hpp"
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
@@ -293,17 +294,18 @@ bool insideLake(double x, double yl) {
 
 const std::vector<std::pair<double, double>>& fujikawaWater() {
     // 第8弾: 静岡県航空協会 富士川滑空場の衛星写真に基づき再配置。
-    // 滑走路(x=-860..-10, 850×30m再設計)の東側すぐ(近岸yl=-50一定、約38m)を富士川本流が並走し、
+    // 滑走路(x=-860..-10, 850×30m再設計)の東側すぐ(近岸yl=-45一定)を富士川本流が並走し、
     // 河口(x≈-200〜1300、南=海側)に近づくほど東岸(遠岸)側が大きく広がって
-    // 網目状の砂州(三角州)を形成する(-160→-700)。前方x>+1400が駿河湾。
+    // 網目状の砂州(三角州)を形成する(-255→-700)。前方x>+1400が駿河湾。
     // Renderer3D::buildEnvFujikawaのriverBanks()ラムダ(視覚描画)と同一の区分線形にして
     // 見た目と当たり判定を一致させている
     static const std::vector<std::pair<double, double>> P = {
         {1500, -6000},                        // 海岸線・東端
-        {1420, -500}, {1380, -50},            // 海岸を河口(近岸側)へ
-        {-8500, -50},                          // 富士川 近岸(滑走路側=東岸)。河口〜上流端まで一定(-50)で並走
-        {-8500, -160},                          // 上流端(対岸へ渡る)
-        {-200, -160}, {1300, -700},            // 富士川 遠岸(東側): x<-200は一定(-160)、河口へ広がる(-700)
+        {1420, -500}, {site::FUJI_RIVER_MOUTH_NEAR_X, site::FUJI_RIVER_NEAR_BANK},
+        {site::FUJI_RIVER_UPSTREAM_X, site::FUJI_RIVER_NEAR_BANK},
+        {site::FUJI_RIVER_UPSTREAM_X, site::FUJI_RIVER_FAR_BANK_UPSTREAM},
+        {site::FUJI_RIVER_WIDEN_START_X, site::fujikawaFarBank(site::FUJI_RIVER_WIDEN_START_X)},
+        {site::FUJI_RIVER_WIDEN_END_X, site::fujikawaFarBank(site::FUJI_RIVER_WIDEN_END_X)},
         {1450, 1600}, {1500, 6000},            // 河口西側から海岸線・西端へ
         {12000, 6000}, {12000, -6000},         // 沖(南)の外周
     };
@@ -311,7 +313,11 @@ const std::vector<std::pair<double, double>>& fujikawaWater() {
 }
 
 bool insideWaterSite(const SimParams& prm, double x, double yl) {
-    if (prm.site == "fujikawa") return pointInPoly(fujikawaWater(), x, yl);
+    if (prm.site == "fujikawa") {
+        // 見えている砂州を先に陸地判定し、水面ポリゴンとの重なりを解消する。
+        if (site::insideFujikawaSandbar(x, yl)) return false;
+        return pointInPoly(fujikawaWater(), x, yl);
+    }
     return insideLake(x, yl);
 }
 

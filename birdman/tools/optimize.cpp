@@ -106,12 +106,12 @@ static EvalOut evaluate(const AircraftParams& st, const SimParams& basePrm) {
     while (!L.done && L.t < 3650) {
         if (prm.sixdof) stepSim6(L, c, prm, 0.02); else stepSim(L, c, prm, 0.02);
     }
-    r.dist = L.path;
-    r.fitness = L.path;
+    r.dist = L.officialDist;
+    r.fitness = L.officialDist;
     // 30km打切りに達した設計同士は「速く着いた方が優秀」:
     // 残り時間を平均対地速度で外挿した仮想距離で順位付けする
-    if (L.path >= 29999 && L.t > 1 && L.t < 3600)
-        r.fitness = 30000.0 + (3600.0 - L.t) * (L.path / L.t);
+    if (L.officialDist >= 29999 && L.t > 1 && L.t < 3600)
+        r.fitness = 30000.0 + (3600.0 - L.t) * (L.officialDist / L.t);
     return r;
 }
 

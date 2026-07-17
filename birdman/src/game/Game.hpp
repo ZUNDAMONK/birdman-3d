@@ -82,7 +82,7 @@ private:
     HUD hud_;
     SaveData save_;
     Audio audio_;
-    bool wasBroken_ = false;
+    bool wasSparBroken_ = false;
     int prevTouchdowns_ = 0;
     DesignPanel design_;
     DesignTools tools_;
