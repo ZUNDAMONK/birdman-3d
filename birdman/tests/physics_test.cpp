@@ -108,7 +108,7 @@ int main() {
     double pr = 0; for (auto& w : biwaWeather()) pr += w.prob;
     check(near(pr, 1.0, 1e-9), "weather probabilities sum to 1");
 
-    // ---- 6DOFモデル(実験) ----
+    // ---- 拡張物理(回転モデル) ----
     {
         SimParams p6 = prm; p6.sixdof = true;
         AircraftConstants c6 = aeroPack(st, a, p6);
@@ -1150,6 +1150,132 @@ int main() {
               && broken.failMode == breakC.failMode
               && broken.failureMsg.find(u8"半翼") != std::string::npos,
               "phase3: actual structural failure records station and mode in its message");
+    }
+
+    // ---- Phase 4: 負揚力・回転モデル操縦補助・双方向構造破壊 ----
+    {
+        std::printf("\n[phase4 flight dynamics]\n");
+        const double smCases[3] = {10.0, 0.0, -5.0};
+        bool sameElevatorSign = true, independentAuthority = true;
+        for (double smCase : smCases) {
+            Analysis ax = a; ax.SM = smCase;
+            AircraftConstants cx = aeroPack(st, ax, prm);
+            independentAuthority = independentAuthority
+                                && near(cx.Cmde, 0.15 * cx.elevAuth, 1e-12);
+            SimParams px = prm; px.assist = false;
+            FlightState lx = makeInitialState(cx, px, 0);
+            lx.ground = false; lx.h = 100; lx.V = cx.Vdesign;
+            lx.gam = lx.theta = lx.alpha = 0; lx.init6 = true;
+            lx.e = 0.4;
+            stepSim6(lx, cx, px, 0.02);
+            sameElevatorSign = sameElevatorSign && lx.qRate > 0;
+        }
+        check(independentAuthority, "phase4: Cmde is 0.15*elevAuth and independent of SM");
+        check(sameElevatorSign, "phase4: elevator keeps the same pitch direction at SM +10/0/-5");
+
+        SimParams assistOn = prm, assistOff = prm;
+        assistOn.assist = true; assistOff.assist = false;
+        auto bankDisturbance = [&](const SimParams& p) {
+            FlightState x = makeInitialState(c, p, 0);
+            x.ground = false; x.h = 200; x.V = c.Vdesign;
+            x.gam = x.theta = x.alpha = 0; x.init6 = true;
+            x.phi = 8.0 * 3.14159265358979323846 / 180.0;
+            for (int i = 0; i < 250 && !x.done; i++) stepSim6(x, c, p, 0.02);
+            return x;
+        };
+        const FlightState rollOn = bankDisturbance(assistOn);
+        const FlightState rollOff = bankDisturbance(assistOff);
+        std::printf("  bank 5s: assist ON %.2fdeg / OFF %.2fdeg\n",
+                    rollOn.phi * 180 / 3.14159265358979323846,
+                    rollOff.phi * 180 / 3.14159265358979323846);
+        check(std::abs(rollOn.phi) < 3.0 * 3.14159265358979323846 / 180.0,
+              "phase4: assist ON levels an 8deg bank disturbance below 3deg");
+        check(std::abs(rollOff.phi) > std::abs(rollOn.phi) + 1.0 * 3.14159265358979323846 / 180.0
+              && rollOff.ailApplied == 0.0,
+              "phase4: assist OFF has no active wing-level command or assisted settling");
+
+        FlightState exact = makeInitialState(c, assistOff, 0);
+        exact.ground = false; exact.h = 100; exact.V = c.Vdesign;
+        exact.gam = exact.theta = exact.alpha = 0; exact.init6 = true;
+        exact.e = 0.17; exact.ail = -0.23; exact.rud = 0.31;
+        stepSim6(exact, c, assistOff, 0.02);
+        check(exact.eApplied == exact.e && exact.ailApplied == exact.ail && exact.rudApplied == exact.rud,
+              "phase4: assist OFF passes all three user controls through exactly");
+
+        // 同じ動圧と要求CLで、両モデルが同符号・概ね同じ負荷重を出す。
+        AircraftConstants cn = c; cn.nFailNeg = -99; cn.VNE = 99;
+        const double negV = 1.8 * cn.Vdesign;
+        const double targetCL = -0.35;
+        const double qn = 0.5 * cn.rho * negV * negV;
+        const double cl1g = cn.W / (qn * cn.S);
+        FlightState n3 = makeInitialState(cn, assistOff, 0);
+        n3.ground = false; n3.h = 200; n3.V = negV; n3.gam = 0;
+        n3.t = 10; n3.liftoffT = -1e9; n3.e = (targetCL - cl1g) / cn.elevAuth; n3.eTgt = n3.e;
+        FlightState n6 = n3;
+        n6.e = 0; n6.theta = n6.gam + (targetCL - cn.CLcruise) / cn.CLa;
+        n6.alpha = n6.theta - n6.gam; n6.init6 = true;
+        stepSim(n3, cn, assistOff, 0.02);
+        stepSim6(n6, cn, assistOff, 0.02);
+        std::printf("  matched negative load: 3DOF %.3f / rotation %.3f\n", n3.n, n6.n);
+        check(n3.n < 0 && n6.n < 0, "phase4: both physics models produce negative load with the same sign");
+        check(std::abs(n3.n - n6.n) / std::max(0.05, std::abs(n3.n)) <= 0.35,
+              "phase4: negative-load magnitude differs by no more than 35 percent");
+
+        auto crossingN = [&](bool six, double target) {
+            FlightState x = makeInitialState(cn, assistOff, 0);
+            x.ground = false; x.h = 200; x.V = 1.5 * cn.Vdesign;
+            x.gam = 0; x.t = 10; x.liftoffT = -1e9;
+            const double qx = 0.5 * cn.rho * x.V * x.V;
+            if (six) {
+                x.theta = (target - cn.CLcruise) / cn.CLa;
+                x.alpha = x.theta; x.init6 = true;
+                stepSim6(x, cn, assistOff, 0.02);
+            } else {
+                const double base = cn.W / (qx * cn.S);
+                x.e = (target - base) / cn.elevAuth; x.eTgt = x.e;
+                stepSim(x, cn, assistOff, 0.02);
+            }
+            return x.n;
+        };
+        const double dN3 = std::abs(crossingN(false, 0.01) - crossingN(false, -0.01));
+        const double dN6 = std::abs(crossingN(true, 0.01) - crossingN(true, -0.01));
+        check(dN3 < 0.15 && dN6 < 0.15, "phase4: load remains continuous while crossing 0G");
+
+        // 限界の1.05倍を繰り返し与え、0.14秒では耐え0.16秒で折れることを確認。
+        AircraftConstants cs = cn; cs.nFailNeg = -0.20;
+        FlightState ns = makeInitialState(cs, assistOff, 0);
+        ns.ground = false; ns.h = 200; ns.t = 10; ns.liftoffT = -1e9;
+        const double persistV = 1.5 * cs.Vdesign;
+        const double persistCL = -0.21 * cs.W / (0.5 * cs.rho * persistV * persistV * cs.S);
+        for (int i = 0; i < 7; i++) {
+            ns.ground = false; ns.h = 200; ns.V = persistV; ns.gam = 0;
+            const double base = cs.W / (0.5 * cs.rho * persistV * persistV * cs.S);
+            ns.e = (persistCL - base) / cs.elevAuth; ns.eTgt = ns.e;
+            stepSim(ns, cs, assistOff, 0.02);
+        }
+        check(!ns.sparBroken && near(ns.overNT, 0.14, 1e-9),
+              "phase4: negative limit exceedance survives the first 0.14 seconds");
+        ns.ground = false; ns.h = 200; ns.V = persistV; ns.gam = 0;
+        stepSim(ns, cs, assistOff, 0.02);
+        check(ns.sparBroken, "phase4: sustained negative limit exceedance breaks at 0.15 seconds");
+
+        SimParams holdOff = assistOff; holdOff.hold = true; holdOff.hTgt = 10;
+        FlightState hh = makeInitialState(c, holdOff, 0);
+        hh.ground = false; hh.h = 10; hh.V = c.Vdesign;
+        hh.gam = hh.theta = hh.alpha = 0; hh.init6 = true;
+        for (int i = 0; i < 500 && !hh.done; i++) stepSim6(hh, c, holdOff, 0.02);
+        check(std::abs(hh.h - holdOff.hTgt) < 1.0,
+              "phase4: altitude hold remains active with general assist OFF");
+
+        FlightState recover = makeInitialState(cn, assistOn, 0);
+        recover.ground = false; recover.h = 200; recover.V = cn.Vdesign;
+        recover.gam = 0;
+        const double negStallAlpha = (-0.50 * cn.CLmax - cn.CLcruise) / cn.CLa;
+        recover.theta = negStallAlpha - 0.08;
+        recover.alpha = recover.theta; recover.init6 = true;
+        for (int i = 0; i < 250 && !recover.done; i++) stepSim6(recover, cn, assistOn, 0.02);
+        check(recover.n >= 0.7 && recover.n <= 1.3,
+              "phase4: assisted negative stall recovers to 0.7-1.3G within 5 seconds");
     }
 
     // ---- 破壊テスト: 桁の弱い機体は高G旋回で折れる ----

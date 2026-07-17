@@ -32,7 +32,7 @@ double thermalCellVz(const SimParams& prm, double x, double yl);
 // 1物理ステップ dt秒 (JS stepSim と同一ロジック。標準=3自由度+バンク)
 void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, double dt);
 
-// 6自由度モデル(実験): ピッチ/ロール/ヨーの回転動力学を持つ。
+// 拡張物理(回転モデル): ピッチ/ロール/ヨーの回転動力学を持つ。
 // 静安定余裕SM・尾翼容積・上反角が実際の動的挙動として現れる。
 void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, double dt);
 

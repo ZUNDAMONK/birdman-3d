@@ -9,6 +9,8 @@ struct BestRun {
     double dist = 0;
     std::string name;
     std::vector<GhostPoint> path;
+    bool sixdof = false;
+    bool assist = true;
     bool valid = false;
 };
 

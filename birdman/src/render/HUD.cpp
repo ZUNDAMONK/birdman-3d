@@ -596,7 +596,7 @@ void HUD::drawMetricsBar(sf::RenderTarget& rt, float W, float y, const AircraftP
     char b[96];
     std::vector<Chip> chips;
     int sm = a.SM < 0 ? 3 : a.SM < 5 ? 2 : a.SM <= 18 ? 1 : 2;
-    const char* smh = a.SM < 0 ? u8"不安定!座席を前へ/尾翼延長" : a.SM < 5 ? u8"やや敏感(5〜18%推奨)" : a.SM <= 18 ? u8"良好" : u8"安定すぎ・舵が重い";
+    const char* smh = a.SM < 0 ? u8"静的不安定 — 操縦補助なしでは発散します" : a.SM < 5 ? u8"やや敏感(5〜18%推奨)" : a.SM <= 18 ? u8"良好" : u8"安定すぎ・舵が重い";
     std::snprintf(b, sizeof(b), "%.1f %%MAC", a.SM);
     chips.push_back({u8"静的安定余裕 SM", b, smh, sm});
     std::snprintf(b, sizeof(b), "%.0f / %+.0f W", a.Preq, a.margin);

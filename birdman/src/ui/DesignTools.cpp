@@ -118,7 +118,8 @@ void DesignTools::build(AircraftParams* st, SimParams* prm,
     bContest_.onClick = [this] {
         if (!cb_.career || !getAn_ || !getAn_()) return;
         const double cost = Career::totalCost(*st_, *getAn_());
-        if (cost <= cb_.career->budget() && cb_.career->lockViolations(*st_).empty() && cb_.onStartContest)
+        if (cost <= cb_.career->budget() && cb_.career->lockViolations(*st_).empty()
+            && getAn_()->SM >= 2.0 && cb_.onStartContest)
             cb_.onStartContest(cost);
     };
 }
@@ -381,10 +382,14 @@ void DesignTools::draw(sf::RenderTarget& rt, HUD& hud, float W, float H) {
             drawText(rt, font, u8"✕ " + lv, p.left + 12, ly, 11, BADC);
             ly += 16;
         }
+        if (an->SM < 2.0) {
+            drawText(rt, font, u8"✕ 大会出場には静的安定余裕 SM 2%以上が必要", p.left + 12, ly, 11, BADC);
+            ly += 16;
+        }
         // 出場ボタン
         std::snprintf(b, sizeof(b), u8"第%d回大会に出場する(天候は当日ガチャ・手動一発勝負)", cr.st.year);
         bContest_.label = b;
-        bContest_.enabled = cost <= bud && locks.empty();
+        bContest_.enabled = cost <= bud && locks.empty() && an->SM >= 2.0;
         bContest_.rect = {p.left + 12, p.top + PANEL_H - 44, 380, 32};
         bContest_.draw(rt, font);
         // 歴代成績
