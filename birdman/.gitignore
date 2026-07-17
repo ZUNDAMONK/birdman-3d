@@ -1,0 +1,18 @@
+# Local build products
+/build/
+
+# Downloaded/vendored dependencies installed locally
+/deps/
+
+# User-specific runtime data
+/save/
+
+# Windows shortcuts and local launch artifacts
+*.lnk
+
+# Editor and OS files
+.vs/
+.vscode/
+Thumbs.db
+.DS_Store
+
