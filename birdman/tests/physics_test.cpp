@@ -1117,6 +1117,10 @@ int main() {
         aircraftFromJson("{\"sparMod\":300}", old300);
         check(old180.sparMat == "t700" && old230.sparMat == "t800" && old300.sparMat == "m40j",
               "phase3: legacy sparMod JSON migrates to approved material grades");
+        check(legacyModForMaterial("t700") == 180 && legacyModForMaterial("t800") == 230
+              && legacyModForMaterial("m40j") == 320
+              && std::string(materialFromLegacyMod(legacyModForMaterial("m40j"))) == "m40j",
+              "phase3: legacy URL export representatives preserve every material grade");
         AircraftParams noMaterial;
         aircraftFromJson("{\"span\":28}", noMaterial);
         check(noMaterial.sparMat == "t700", "phase3: JSON without either material key keeps T700 default");
@@ -1125,6 +1129,16 @@ int main() {
         aircraftFromJson(aircraftToJson(saved), loaded);
         check(loaded.sparMat == "m40j" && near(loaded.boomDia, 95, 1e-12),
               "phase3: sparMat and boomDia survive JSON round-trip");
+
+        AircraftParams seamless = t700;
+        seamless.rootDia = 115; seamless.tipDia = 45; seamless.segments = 1;
+        AircraftParams sleeved = seamless; sleeved.segments = 5;
+        const Analysis aSeamless = analyze(seamless), aSleeved = analyze(sleeved);
+        std::printf("[phase3 joint] seamless SF=%.2f / 5-piece SF=%.2f station=%.2f\n",
+                    aSeamless.sparSF, aSleeved.sparSF, aSleeved.failStation);
+        check(aSleeved.sparSF < aSeamless.sparSF
+              && near(aSleeved.failStation, 0.20, 1e-12),
+              "phase3: sleeve 0.80 knockdown lowers SF at the first strong-taper joint");
 
         AircraftConstants breakC = c700;
         breakC.nFail = 0.5;

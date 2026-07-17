@@ -427,7 +427,7 @@ void DesignTools::exportJsUrl() {
         s.propConfig.c_str(), s.propDia, s.propBlades, s.propMat.c_str(),
         s.posture.c_str(), s.seatX, s.pilotW, s.cd0Add, s.powerMax,
         s.fairing ? "true" : "false", s.gear.c_str(), s.segments, s.rootDia, s.tipDia,
-        s.sparMat.c_str(), materialOf(s.sparMat).young / 1e9, s.boomDia,
+        s.sparMat.c_str(), legacyModForMaterial(s.sparMat), s.boomDia,
         s.drive.c_str(), s.driveEffPct,
         s.hShape.c_str(), s.hSpan, s.hChord, s.tailArm,
         s.vShape.c_str(), s.vHeight, s.vChord, s.elevRatio, s.rudRatio);

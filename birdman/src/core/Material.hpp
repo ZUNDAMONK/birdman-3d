@@ -34,6 +34,11 @@ inline const char* materialFromLegacyMod(double sparMod) {
     return sparMod <= 200 ? "t700" : sparMod <= 260 ? "t800" : "m40j";
 }
 
+// Three.js版URL共有の旧sparModへ戻す代表値。境界値をまたがせ、往復時の等級を保つ。
+inline double legacyModForMaterial(const std::string& id) {
+    return id == "m40j" ? 320.0 : id == "t800" ? 230.0 : 180.0;
+}
+
 constexpr double CFRP_DESIGN_K = 0.55;
 constexpr double CFRP_G_OVER_E = 1.0 / 24.0; // gameplay-calibrated effective laminate shear modulus
 constexpr double SPAR_MASS_CAL = 0.78;
