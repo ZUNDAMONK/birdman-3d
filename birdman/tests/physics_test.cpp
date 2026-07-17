@@ -364,6 +364,40 @@ int main() {
                      && near(player.verticalGust, rival.verticalGust, 1e-12);
         }
         check(shared, "weather: copied player/rival environments replay the same seeded samples");
+
+        // Dryden乱流もFlightStateごとのweatherSeed系列を使い、グローバル乱数や
+        // プレイヤー/ライバルの呼び出し順に影響されない。
+        SimParams dry = prm;
+        dry.summer = false; dry.turb = 0.8; dry.thermal = 0;
+        dry.terrainWind = false; dry.pjit = false; dry.stamina = false;
+        dry.weatherSeed = 0x2468ACE1u;
+        FlightState dryA = makeInitialState(c, dry, 0);
+        FlightState dryB = makeInitialState(c, dry, 0);
+        for (FlightState* L : {&dryA, &dryB}) {
+            L->ground = false; L->h = 100; L->V = c.Vt; L->gam = 0;
+            L->t = 10; L->liftoffT = -1e9;
+        }
+        bool drySame = true;
+        for (int i = 0; i < 500; i++) {
+            stepSim(dryA, c, dry, 0.02);
+            frand(); frand(); frand();                    // 外部の乱数消費を模擬
+            stepSim(dryB, c, dry, 0.02);
+            drySame = drySame && near(dryA.tz, dryB.tz, 1e-12)
+                      && near(dryA.ty, dryB.ty, 1e-12)
+                      && near(dryA.x, dryB.x, 1e-10)
+                      && near(dryA.h, dryB.h, 1e-10);
+        }
+        check(drySame, "weather: seeded Dryden flight is independent of global RNG/call order");
+
+        FlightState dryBase = makeInitialState(c, dry, 0);
+        dryBase.V = c.Vt; dryBase.h = 100;
+        stepTurbulence(dryBase, dry, 0.02);
+        SimParams dryOther = dry; dryOther.weatherSeed++;
+        FlightState dryC = makeInitialState(c, dryOther, 0);
+        dryC.V = c.Vt; dryC.h = 100;
+        stepTurbulence(dryC, dryOther, 0.02);
+        check(!near(dryBase.tz, dryC.tz, 1e-6),
+              "weather: a different seed changes the Dryden sequence");
     }
 
     // ---- Phase 2: 垂直突風荷重を3DOF/6DOFで共通化 ----
@@ -986,6 +1020,20 @@ int main() {
         bool advected = n0 > 0 && n0 == n1;
         for (int i = 0; i < std::min(n0, n1); i++) advected = advected && sx1[i] > sx0[i] + 5.0;
         check(advected, "thermal cells advect downwind at a deterministic rate");
+
+        // 最強風ではセルが約2.2km移流する。可視化APIが返すコア位置を物理場でも
+        // 必ず拾えることを確認し、固定7x7探索への後戻りを防ぐ。
+        SimParams strong = pt; strong.wspdMean = 9.3; strong.wdir = 180;
+        double sx[256], sy[256], ss[256], sr[256];
+        const int ns = thermalSitesNear(strong, 3000, 4000, 400, 256, sx, sy, ss, sr);
+        int strongCores = 0;
+        bool coresFound = true;
+        for (int i = 0; i < ns; i++) if (ss[i] > 0.2) {
+            strongCores++;
+            coresFound = coresFound && thermalFieldVz(strong, sx[i], sy[i], 400) > 0.03;
+        }
+        check(strongCores > 0 && coresFound,
+              "thermal: strong-wind advected cores remain inside the physics search");
     }
 
     // ---- 破壊テスト: 桁の弱い機体は高G旋回で折れる ----
@@ -1038,7 +1086,7 @@ int main() {
         AircraftConstants cf2 = aeroPack(fl2, analyze(fl2), prm);
         check(cf2.dihBase == 0 && cf2.dihBend > 0.3, "flex: flat jig gains dihedral from load");
     }
-    // Dryden乱流: 決定的でないが、RMSが強度に比例し高空で弱まる
+    // Dryden乱流: seedに対して決定的で、RMSが強度に比例し高空で弱まる
     {
         SimParams pt3 = prm; pt3.turb = 1.0;
         FlightState Lt; Lt.V = 7.5;

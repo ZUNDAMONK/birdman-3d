@@ -270,6 +270,15 @@ std::string todLabel(const SimParams& prm) {
 }
 
 // ---- 動的サーマル場 ----
+static const double THERMAL_GRID = 700.0;
+static const double THERMAL_MAX_PERIOD = 660.0;
+static const double THERMAL_DUTY = 0.55;
+static const double THERMAL_ADVECTION = 0.65;
+static const double THERMAL_SOURCE_JITTER = 250.0;
+static const double THERMAL_MAX_RADIUS = 360.0;
+static const double THERMAL_CORE_SIGMA = 0.62;
+static const double THERMAL_RING_SCALE = 2.4;
+
 static unsigned thHash(int i, int j, unsigned k) {
     unsigned h = (unsigned)(i * 374761393) ^ (unsigned)(j * 668265263) ^ (k * 2246822519u);
     h ^= h >> 13; h *= 1274126177u; h ^= h >> 16;
@@ -282,12 +291,12 @@ static double thRand(int i, int j, unsigned k) {
 // 陸上発生を基準1、水上発生を0.12へ抑え、湖・川・海上の強い対流を防ぐ。
 static bool thCell(const SimParams& prm, int i, int j, double t,
                    double& cx, double& cyl, double& R, double& env, double& surfaceFac) {
-    const double G = 700.0;
+    const double G = THERMAL_GRID;
     const double sourceX = i * G + (thRand(i, j, 1) - 0.5) * 500;
     const double sourceY = j * G + (thRand(i, j, 2) - 0.5) * 500;
     R = 170 + thRand(i, j, 3) * 190;
     const double period = 420 + thRand(i, j, 4) * 240;   // 寿命サイクル7〜11分
-    const double duty = 0.55;
+    const double duty = THERMAL_DUTY;
     const double u = std::fmod(t / period + thRand(i, j, 5), 1.0);
     if (u >= duty) { env = 0; return false; }
     env = std::sin(PI * u / duty);                       // 湧く→ピーク→消える
@@ -299,26 +308,37 @@ static bool thCell(const SimParams& prm, int i, int j, double t,
         meanWind = prm.wspdMean * -std::cos(th);
         meanXwind = prm.wspdMean * -std::sin(th);
     }
-    static const double ADVECTION = 0.65;                // 境界層平均風の65%でセル中心を移流
-    cx = sourceX + meanWind * ADVECTION * age;
-    cyl = sourceY + meanXwind * ADVECTION * age;
+    cx = sourceX + meanWind * THERMAL_ADVECTION * age;   // 境界層平均風の65%で移流
+    cyl = sourceY + meanXwind * THERMAL_ADVECTION * age;
     return true;
+}
+
+// 発生源はセル中心からずれ、寿命中に平均風下へ移流する。さらに下降流リングまで
+// 含めた最大到達距離から探索範囲を決め、強風時にも上風側の発生セルを落とさない。
+static int thermalSearchCells(const SimParams& prm) {
+    const double windSpeed = prm.wspdMean > 0.01
+        ? prm.wspdMean : std::sqrt(prm.wind * prm.wind + prm.xwind * prm.xwind);
+    const double maxDrift = windSpeed * THERMAL_ADVECTION
+                          * THERMAL_MAX_PERIOD * THERMAL_DUTY;
+    const double ringReach = THERMAL_RING_SCALE * THERMAL_CORE_SIGMA * THERMAL_MAX_RADIUS;
+    const double reach = maxDrift + THERMAL_SOURCE_JITTER + ringReach;
+    return clamp((int)std::ceil(reach / THERMAL_GRID), 3, 8);
 }
 
 double thermalFieldVz(const SimParams& prm, double x, double yl, double t) {
     if (prm.thermal <= 0) return 0;
-    const double G = 700.0;
+    const double G = THERMAL_GRID;
     const int ci = (int)std::floor(x / G + 0.5), cj = (int)std::floor(yl / G + 0.5);
+    const int search = thermalSearchCells(prm);
     double vz = -0.01 * prm.thermal;
-    // 最大約1kmの移流を考慮して周囲7x7サイトを探索する。
-    for (int i = ci - 3; i <= ci + 3; i++)
-        for (int j = cj - 3; j <= cj + 3; j++) {
+    for (int i = ci - search; i <= ci + search; i++)
+        for (int j = cj - search; j <= cj + search; j++) {
             double cx, cyl, R, env, surfaceFac;
             if (!thCell(prm, i, j, t, cx, cyl, R, env, surfaceFac)) continue;
             const double d2 = (x - cx) * (x - cx) + (yl - cyl) * (yl - cyl);
             const double s = R * 0.62;
             const double core = std::exp(-d2 / (2 * s * s));
-            const double ringS = 2.4 * s;
+            const double ringS = THERMAL_RING_SCALE * s;
             const double ring = std::exp(-d2 / (2 * ringS * ringS));
             // 0.17*(2.4^2)≈0.98なので、広い領域でコア上昇と周辺沈下がほぼ釣り合う。
             const double shape = core - 0.17 * ring;
@@ -330,11 +350,13 @@ double thermalFieldVz(const SimParams& prm, double x, double yl, double t) {
 int thermalSitesNear(const SimParams& prm, double x, double yl, double t,
                      int maxN, double* sx, double* syl, double* sstr, double* srad) {
     if (prm.thermal <= 0) return 0;
-    const double G = 700.0;
+    const double G = THERMAL_GRID;
     const int ci = (int)std::floor(x / G + 0.5), cj = (int)std::floor(yl / G + 0.5);
+    // 表示側は従来の周囲11x11を最低範囲として維持し、強風時だけ広げる。
+    const int search = std::max(5, thermalSearchCells(prm));
     int n = 0;
-    for (int i = ci - 5; i <= ci + 5 && n < maxN; i++)
-        for (int j = cj - 5; j <= cj + 5 && n < maxN; j++) {
+    for (int i = ci - search; i <= ci + search && n < maxN; i++)
+        for (int j = cj - search; j <= cj + search && n < maxN; j++) {
             double cx, cyl, R, env, surfaceFac;
             if (!thCell(prm, i, j, t, cx, cyl, R, env, surfaceFac)) continue;
             const double str = prm.thermal * surfaceFac * (0.5 + 0.9 * thRand(i, j, 6)) * env;

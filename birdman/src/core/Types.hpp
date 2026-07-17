@@ -190,6 +190,7 @@ struct FlightState {
     double flap = 0, flapTgt = 0;        // フラップ展開量 0..1 (Gキーで0/½/1切替)
     double n = 1;
     double tz = 0, ty = 0;               // 乱流(有色ノイズ)
+    unsigned turbRng = 0x13579BDFu;       // weatherSeed由来の乱流専用RNG（呼出順に非依存）
     double thrm = 0, thrmVz = 0;
     bool   inThermal = false, inThermalUsed = false;
     double wbal = 0;                     // 無酸素容量残 J(W': CP以下で回復する速攻バッテリー)

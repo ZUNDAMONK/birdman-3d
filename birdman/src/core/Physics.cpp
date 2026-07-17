@@ -280,6 +280,10 @@ FlightState makeInitialState(const AircraftConstants& c, const SimParams& prm, d
     L.wbal = prm.wcap * 1000;
     L.Pnow = prm.auto_ ? c.CP : prm.P;
     L.z0 = z0;
+    // 気象ジッターとは別ストリームだが、同じweatherSeedなら同じDryden乱流系列になる。
+    // FlightStateがRNGを所有するため、プレイヤー/ライバルの更新順にも依存しない。
+    L.turbRng = (prm.weatherSeed ^ 0xA511E9B3u) ? (prm.weatherSeed ^ 0xA511E9B3u)
+                                                : 0x13579BDFu;
     if (runway && !c.hasGear) {
         L.done = true; L.overrun = true; L.nogear = true; L.officialInvalid = true;
     }
@@ -310,7 +314,14 @@ void stepTurbulence(FlightState& L, const SimParams& prm, double dt) {
     const double V = std::max(L.V, 2.0);
     const double tauW = clamp(L.h, 3.0, 60.0) / V;          // 鉛直成分
     const double tauV = clamp(2.0 * L.h, 8.0, 120.0) / V;   // 横成分
-    auto gauss = [] { return (frand() + frand() + frand() + frand() - 2.0) * 1.732; };
+    auto uniform = [&] {
+        unsigned x = L.turbRng ? L.turbRng : 0x13579BDFu;
+        x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+        L.turbRng = x;
+        return (x & 0x00ffffffu) / (double)0x01000000u;
+    };
+    auto gauss = [&] { return (uniform() + uniform() + uniform() + uniform() - 2.0)
+                             * 1.7320508075688772; };
     const double aW = std::min(1.0, dt / tauW), aV = std::min(1.0, dt / tauV);
     L.tz += -L.tz * aW + sig * std::sqrt(2 * aW) * gauss();
     L.ty += -L.ty * aV + 0.78 * sig * std::sqrt(2 * aV) * gauss();
