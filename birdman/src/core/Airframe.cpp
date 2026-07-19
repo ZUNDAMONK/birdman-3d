@@ -475,6 +475,53 @@ MassBreakdown aggregateMass(const AirframeGraph& graph) {
     return result;
 }
 
+AeroLayoutProperties aggregateAeroLayout(const AirframeGraph& graph) {
+    AeroLayoutProperties result;
+    const auto placed = graph.resolve();
+    if (placed.empty()) return result;
+
+    bool haveWing = false;
+    double hWeightedZ = 0.0, hFallbackZ = 0.0;
+    double vWeightedZ = 0.0, vFallbackZ = 0.0;
+    int hCount = 0, vCount = 0;
+    for (const auto& instance : placed) {
+        const glm::dvec3 origin(instance.world[3]);
+        const glm::dmat3 rotation(instance.world);
+        if (instance.part->id == "wing.main" && !instance.mirrored && !haveWing) {
+            const glm::dvec3 chord = glm::normalize(rotation * glm::dvec3(0.0, 0.0, 1.0));
+            result.wingLEZ = origin.z;
+            result.wingIncidenceDeg = glm::degrees(std::atan2(-chord.y, chord.z));
+            haveWing = finiteVec(origin) && finiteVec(chord)
+                && std::isfinite(result.wingIncidenceDeg);
+        } else if (instance.part->id == "tail.h") {
+            const glm::dvec3 normal = glm::normalize(rotation * glm::dvec3(0.0, 1.0, 0.0));
+            const double projection = std::abs(normal.y);
+            if (!finiteVec(origin) || !finiteVec(normal) || !std::isfinite(projection)) return {};
+            result.hAreaScale += projection;
+            hWeightedZ += projection * origin.z;
+            hFallbackZ += origin.z;
+            ++hCount;
+        } else if (instance.part->id == "tail.v") {
+            const glm::dvec3 normal = glm::normalize(rotation * glm::dvec3(1.0, 0.0, 0.0));
+            const double projection = std::abs(normal.x);
+            if (!finiteVec(origin) || !finiteVec(normal) || !std::isfinite(projection)) return {};
+            result.vAreaScale += projection;
+            vWeightedZ += projection * origin.z;
+            vFallbackZ += origin.z;
+            ++vCount;
+        }
+    }
+    if (!haveWing || hCount == 0 || vCount == 0) return result;
+    result.hTailZ = result.hAreaScale > 1e-9 ? hWeightedZ / result.hAreaScale
+                                             : hFallbackZ / hCount;
+    result.vTailZ = result.vAreaScale > 1e-9 ? vWeightedZ / result.vAreaScale
+                                             : vFallbackZ / vCount;
+    result.valid = std::isfinite(result.wingLEZ) && std::isfinite(result.hTailZ)
+        && std::isfinite(result.vTailZ) && std::isfinite(result.hAreaScale)
+        && std::isfinite(result.vAreaScale);
+    return result;
+}
+
 AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an) {
     AirframeGraph graph;
     const double hWing = st.posture == "upright" ? 2.4 : 2.0;

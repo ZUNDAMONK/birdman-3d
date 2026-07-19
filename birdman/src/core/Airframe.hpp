@@ -168,6 +168,20 @@ struct MassBreakdown {
 // Pair部品のMassNode::kgは片側分として2インスタンスへ自動計上される。
 MassBreakdown aggregateMass(const AirframeGraph& graph);
 
+struct AeroLayoutProperties {
+    bool valid = false;
+    double wingLEZ = 0.0;
+    double wingIncidenceDeg = 0.0;
+    double hTailZ = 0.0;
+    double hAreaScale = 0.0;
+    double vTailZ = 0.0;
+    double vAreaScale = 0.0;
+};
+
+// 配置済み主翼・尾翼から空力に必要な前後位置、取付角、投影面積倍率を集約する。
+// 水平尾翼は世界Y方向、垂直尾翼は世界X方向への法線投影を有効面積とする。
+AeroLayoutProperties aggregateAeroLayout(const AirframeGraph& graph);
+
 // 既存パラメータを真実の源として、決定的な標準機Layoutを生成する。
 AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an);
 

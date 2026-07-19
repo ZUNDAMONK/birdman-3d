@@ -98,6 +98,75 @@ int main() {
           && near(fallback.Ixx, c.Ixx, 1e-12),
           "invalid custom mass properties fall back to legacy constants");
 
+    // ---- Phase 0C-2: 実配置を空力・操縦安定へ接続 ----
+    const AirframeGraph standardLayout = buildDefaultLayout(st, a);
+    const AeroLayoutProperties standardAero = aggregateAeroLayout(standardLayout);
+    const AircraftConstants sameLayout = aeroPackCustomLayout(
+        st, a, prm, referenceMass, referenceMass, standardAero);
+    check(near(sameLayout.a.xAC, c.a.xAC, 1e-12)
+          && near(sameLayout.a.xHT, c.a.xHT, 1e-12)
+          && near(sameLayout.a.xVT, c.a.xVT, 1e-12)
+          && near(sameLayout.CLg0, c.CLg0, 1e-12),
+          "default aero layout preserves legacy geometry and incidence");
+    check(near(sameLayout.Cma, c.Cma, 1e-12) && near(sameLayout.Cmq, c.Cmq, 1e-12)
+          && near(sameLayout.Cnb, c.Cnb, 1e-12) && near(sameLayout.Cnr, c.Cnr, 1e-12),
+          "default aero layout preserves legacy stability derivatives");
+
+    AirframeGraph aftHTail = standardLayout;
+    Mount hMount = aftHTail.find("tail.h")->mount;
+    hMount.offset.pos.z = 0.8;
+    check(aftHTail.setMount("tail.h", hMount), "physics fixture moves horizontal tail");
+    const AircraftConstants aftH = aeroPackCustomLayout(
+        st, a, prm, referenceMass, referenceMass, aggregateAeroLayout(aftHTail));
+    check(aftH.a.xHT > c.a.xHT && aftH.a.Vh > c.a.Vh && aftH.a.SM > c.a.SM
+          && aftH.Cmq < c.Cmq,
+          "aft horizontal tail increases volume, static stability, and pitch damping");
+
+    AirframeGraph twinVTail = standardLayout;
+    Mount vMount = twinVTail.find("tail.v")->mount;
+    vMount.parentId = "tail.h"; vMount.hardpointId = "hp.tip";
+    vMount.mirror = MirrorMode::Pair;
+    check(twinVTail.setMount("tail.v", vMount), "physics fixture mounts twin fins");
+    const AircraftConstants twinV = aeroPackCustomLayout(
+        st, a, prm, referenceMass, referenceMass, aggregateAeroLayout(twinVTail));
+    check(near(twinV.a.Sv, 2.0 * a.Sv, 1e-12) && twinV.Cnb > c.Cnb
+          && twinV.Cnr < c.Cnr,
+          "twin fins increase effective area and directional stability");
+
+    AirframeGraph flatVTail = standardLayout;
+    vMount = flatVTail.find("tail.v")->mount;
+    vMount.offset.rotDeg.z = 90.0;
+    check(flatVTail.setMount("tail.v", vMount), "physics fixture tilts fin horizontal");
+    const AircraftConstants flatV = aeroPackCustomLayout(
+        st, a, prm, referenceMass, referenceMass, aggregateAeroLayout(flatVTail));
+    check(flatV.a.Sv < 1e-12 && std::abs(flatV.Cnb) < 1e-12,
+          "horizontal fin loses vertical projected area and weathercock stability");
+
+    AirframeGraph movedWing = standardLayout;
+    Mount wingMount = movedWing.find("wing.main")->mount;
+    wingMount.offset.pos.z = 0.5;
+    wingMount.offset.rotDeg.x = 2.0;
+    check(movedWing.setMount("wing.main", wingMount), "physics fixture moves and rotates wing");
+    const AircraftConstants shiftedWing = aeroPackCustomLayout(
+        st, a, prm, referenceMass, referenceMass, aggregateAeroLayout(movedWing));
+    check(shiftedWing.a.xAC > c.a.xAC && shiftedWing.a.SM > c.a.SM
+          && shiftedWing.CLg0 > c.CLg0,
+          "wing position and incidence feed static margin and ground lift");
+
+    AeroLayoutProperties invalidAero;
+    const AircraftConstants aeroFallback = aeroPackCustomLayout(
+        st, a, prm, referenceMass, referenceMass, invalidAero);
+    check(near(aeroFallback.a.xAC, c.a.xAC, 1e-12)
+          && near(aeroFallback.Cnb, c.Cnb, 1e-12),
+          "invalid aero layout falls back to legacy constants");
+    invalidAero.valid = true;
+    invalidAero.wingLEZ = std::numeric_limits<double>::quiet_NaN();
+    const AircraftConstants nanAeroFallback = aeroPackCustomLayout(
+        st, a, prm, referenceMass, referenceMass, invalidAero);
+    check(near(nanAeroFallback.a.xAC, c.a.xAC, 1e-12)
+          && near(nanAeroFallback.Cnb, c.Cnb, 1e-12),
+          "non-finite aero layout fields fall back even when marked valid");
+
     // ---- computePolar ----
     PolarResult pol = computePolar(st, a, prm);
     std::printf("[polar] Vs=%.3f  minP=%.1fW @%.1fm/s  L/Dmax=%.2f @%.1fm/s  Dp=%.2fN Di=%.2fN\n\n",
