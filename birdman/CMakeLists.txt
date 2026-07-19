@@ -58,6 +58,17 @@ add_executable(physics_test
 )
 target_include_directories(physics_test PRIVATE src)
 
+# Phase 6: 物理回帰を標準CTestワークフローへ登録する。
+# 既存テスト内で長時間巡航、30/60/120fps、x1/x10/x40、3DOF/6DOFを検証する。
+include(CTest)
+if(BUILD_TESTING)
+    add_test(NAME physics_regression COMMAND physics_test)
+    set_tests_properties(physics_regression PROPERTIES
+        LABELS "physics;regression;release"
+        TIMEOUT 30
+    )
+endif()
+
 # 機体設計 自動最適化CLI(ヘッドレス・マルチスレッド)
 add_executable(optimize
     tools/optimize.cpp
