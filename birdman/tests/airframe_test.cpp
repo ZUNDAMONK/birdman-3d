@@ -76,6 +76,12 @@ void miniJsonTests() {
     check(bm::vec3FromJson(value, v) && near(v, {1.0, 2.0, 3.0}), "vec3 JSON valid");
     bm::json::parse("[1,2]", value);
     check(!bm::vec3FromJson(value, v) && near(v, {1.0, 2.0, 3.0}), "vec3 JSON failure leaves value unchanged");
+
+    std::string tooDeep;
+    for (int i = 0; i < 70; ++i) tooDeep.push_back('[');
+    tooDeep += '0';
+    for (int i = 0; i < 70; ++i) tooDeep.push_back(']');
+    check(!bm::json::parse(tooDeep, value, &error), "JSON nesting depth is bounded");
 }
 
 void rotationTests() {
@@ -212,6 +218,105 @@ void mutationTests() {
     check(!graph.removeSubtree("body") && graph.size() == 1, "reject root removal");
 }
 
+void atomicEditingTests() {
+    bm::Part root = rootPart();
+    root.hardpoints.push_back({"alternate", {{4.0, 0.0, 0.0}, {0.0, 0.0, 0.0}}});
+    bm::Part wing = mounted("wing", bm::PartKind::Wing, "body", "wing");
+    wing.hardpoints.push_back({"child", {{0.0, 1.0, 0.0}, {0.0, 0.0, 0.0}}});
+    bm::Part pod = mounted("pod", bm::PartKind::Fairing, "wing", "child");
+    pod.hardpoints.push_back({"cycle", {}});
+    bm::AirframeGraph graph = bm::AirframeGraph::fromUntrusted({root, wing, pod});
+    check(graph.validate().empty(), "atomic edit fixture validates");
+
+    bm::Mount moved = graph.find("wing")->mount;
+    moved.offset.pos = {1.5, 0.25, -0.5};
+    moved.offset.rotDeg = {370.0, -725.0, 90.0};
+    moved.mirror = bm::MirrorMode::Pair;
+    check(graph.setMount("wing", moved), "atomic mount transform and mirror edit");
+    const bm::Part* movedWing = graph.find("wing");
+    check(movedWing && near(movedWing->mount.offset.rotDeg, {10.0, -5.0, 90.0}),
+          "edited mount angles are normalized");
+    int wingInstances = 0, podInstances = 0;
+    for (const auto& item : graph.resolve()) {
+        if (item.part->id == "wing") ++wingInstances;
+        if (item.part->id == "pod") ++podInstances;
+    }
+    check(wingInstances == 2 && podInstances == 2, "mount mirror edit propagates to children");
+
+    const bm::Mount beforeFailure = graph.find("wing")->mount;
+    std::string error;
+    bm::Mount invalid = beforeFailure;
+    invalid.parentId = "pod";
+    invalid.hardpointId = "cycle";
+    check(!graph.setMount("wing", invalid, &error) && !error.empty(), "cycle edit is rejected");
+    check(graph.find("wing")->mount.parentId == beforeFailure.parentId
+          && graph.find("wing")->mount.hardpointId == beforeFailure.hardpointId,
+          "cycle rejection preserves original graph");
+
+    bm::Transform3 alternate;
+    alternate.pos = {5.0, 2.0, 1.0};
+    check(graph.setHardpointTransform("body", "alternate", alternate), "hardpoint transform edit");
+    bm::Mount reattached = graph.find("pod")->mount;
+    reattached.parentId = "body";
+    reattached.hardpointId = "alternate";
+    check(graph.setMount("pod", reattached), "atomic reattach to another hardpoint");
+    const auto reattachedPlaced = graph.resolve();
+    const bm::AirframeGraph::Placed* podPlacement = nullptr;
+    for (const auto& item : reattachedPlaced)
+        if (!item.mirrored && item.part->id == "pod") podPlacement = &item;
+    check(podPlacement && near(point(podPlacement->world), {5.0, 2.0, 1.0}),
+          "reattached part follows edited hardpoint");
+
+    invalid = beforeFailure;
+    invalid.hardpointId = "missing";
+    check(!graph.setMount("wing", invalid), "missing hardpoint edit is rejected");
+    check(!graph.setMount("body", {}), "root mount edit is rejected");
+
+    bm::Part renamed = *graph.find("wing");
+    renamed.id = "renamed";
+    check(!graph.replacePart("wing", renamed), "stable part id cannot be changed");
+
+    bm::Part brokenRoot = *graph.find("body");
+    brokenRoot.hardpoints.erase(brokenRoot.hardpoints.begin() + 2);
+    check(!graph.replacePart("body", brokenRoot), "hardpoint used by a child cannot be removed");
+    check(graph.find("body")->hardpoints.size() == 3, "failed parent edit is rolled back");
+
+    bm::Transform3 invalidTransform;
+    invalidTransform.pos.x = std::numeric_limits<double>::quiet_NaN();
+    check(!graph.setHardpointTransform("body", "alternate", invalidTransform),
+          "non-finite hardpoint edit is rejected");
+    const bm::Hardpoint* preservedAlternate = nullptr;
+    for (const auto& hp : graph.find("body")->hardpoints)
+        if (hp.id == "alternate") preservedAlternate = &hp;
+    check(preservedAlternate && near(preservedAlternate->t.pos, {5.0, 2.0, 1.0}),
+          "invalid hardpoint edit preserves original transform");
+    check(!graph.setHardpointTransform("body", "missing", {}), "unknown hardpoint edit is rejected");
+    check(!graph.replacePart("missing", {}), "unknown part replacement is rejected");
+
+    bm::AirframeGraph nestedPair;
+    bm::Part pairRoot = rootPart();
+    check(nestedPair.addPart(pairRoot), "nested pair root");
+    bm::Part pairParent = mounted("pair-parent", bm::PartKind::Wing, "body", "wing");
+    pairParent.mount.mirror = bm::MirrorMode::Pair;
+    pairParent.hardpoints.push_back({"pair-child", {}});
+    check(nestedPair.addPart(pairParent), "nested pair parent");
+    bm::Part pairChild = mounted("pair-child", bm::PartKind::Fairing, "pair-parent", "pair-child");
+    pairChild.mount.mirror = bm::MirrorMode::Pair;
+    check(!nestedPair.addPart(pairChild), "nested Pair insertion is rejected");
+    check(nestedPair.validate().empty() && nestedPair.resolve().size() == 3,
+          "nested Pair rejection preserves the valid graph");
+
+    bm::AirframeGraph untrustedNested = bm::AirframeGraph::fromUntrusted({pairRoot, pairParent, pairChild});
+    check(!untrustedNested.validate().empty() && untrustedNested.resolve().empty(),
+          "untrusted nested Pair is rejected before expansion");
+
+    bm::Mount nestedMount = graph.find("pod")->mount;
+    nestedMount.parentId = "wing";
+    nestedMount.hardpointId = "child";
+    nestedMount.mirror = bm::MirrorMode::Pair;
+    check(!graph.setMount("pod", nestedMount), "atomic edit rejects nested Pair");
+}
+
 const bm::AirframeGraph::Placed* normalPlacement(
     const std::vector<bm::AirframeGraph::Placed>& placed, const std::string& id) {
     for (const auto& item : placed)
@@ -329,6 +434,11 @@ void defaultLayoutTests() {
             for (const auto& mass : entry.second.massNodes) totalKg += mass.kg;
         check(near(totalKg, an.W, 1e-9), "boomwing layout mass total: " + mode);
     }
+
+    bm::AircraftParams invalid;
+    invalid.wingX = 1001.0;
+    const bm::AirframeGraph rejected = bm::buildDefaultLayout(invalid, bm::analyze(invalid));
+    check(rejected.resolve().empty(), "out-of-range generated layout fails safely");
 }
 
 void aggregateMassTests() {
@@ -437,6 +547,17 @@ void designJsonV2Tests() {
               "invalid layout falls back " + std::to_string(i));
     }
 
+    std::string excessiveParts = R"({"schemaVersion":2,"layout":{"parts":[)";
+    for (int i = 0; i < 513; ++i) {
+        if (i) excessiveParts += ',';
+        excessiveParts += R"({"id":"p)" + std::to_string(i) + R"(","kind":"unknown"})";
+    }
+    excessiveParts += "]}}";
+    bm::AircraftParams excessiveParams;
+    const bm::AircraftJsonReport excessive = bm::aircraftFromJson(excessiveParts, excessiveParams);
+    check(excessive.layoutPresent && !excessive.layoutAccepted && !excessive.warnings.empty(),
+          "excessive layout part count falls back");
+
     bm::AircraftParams brokenParams;
     const bm::AircraftJsonReport broken = bm::aircraftFromJson(
         "{\"schemaVersion\":2,\"span\":33,\"layout\":{\"parts\":[", brokenParams);
@@ -488,6 +609,7 @@ int main() {
     graphResolveTests();
     validationTests();
     mutationTests();
+    atomicEditingTests();
     defaultLayoutTests();
     aggregateMassTests();
     designJsonV2Tests();

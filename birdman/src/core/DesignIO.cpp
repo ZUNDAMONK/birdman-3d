@@ -107,6 +107,9 @@ std::string aircraftToJson(const AircraftParams& st) {
 
 namespace {
 
+constexpr std::size_t kMaxLayoutParts = 512;
+constexpr std::size_t kMaxPartHardpoints = 256;
+
 void addWarning(AircraftJsonReport& report, std::string message) {
     report.warnings.push_back(std::move(message));
 }
@@ -158,6 +161,10 @@ AirframeGraph parseLayout(const json::Value& layout, AircraftJsonReport& report)
         addWarning(report, "layout.parts must be an array");
         return AirframeGraph::fromUntrusted(std::move(parts));
     }
+    if (values->array.size() > kMaxLayoutParts) {
+        addWarning(report, "layout.parts exceeds the maximum of " + std::to_string(kMaxLayoutParts));
+        return AirframeGraph::fromUntrusted(std::move(parts));
+    }
     for (std::size_t index = 0; index < values->array.size(); ++index) {
         const json::Value& source = values->array[index];
         const std::string context = "layout.parts[" + std::to_string(index) + "]";
@@ -187,7 +194,11 @@ AirframeGraph parseLayout(const json::Value& layout, AircraftJsonReport& report)
 
         if (const json::Value* hardpoints = source.find("hardpoints")) {
             if (!hardpoints->isArray()) addWarning(report, context + ".hardpoints must be an array");
-            else for (std::size_t hpIndex = 0; hpIndex < hardpoints->array.size(); ++hpIndex) {
+            else if (hardpoints->array.size() > kMaxPartHardpoints) {
+                addWarning(report, context + ".hardpoints exceeds the maximum of "
+                    + std::to_string(kMaxPartHardpoints));
+                return AirframeGraph::fromUntrusted({});
+            } else for (std::size_t hpIndex = 0; hpIndex < hardpoints->array.size(); ++hpIndex) {
                 const json::Value& hpSource = hardpoints->array[hpIndex];
                 const std::string hpContext = context + ".hardpoints[" + std::to_string(hpIndex) + "]";
                 Hardpoint hp;

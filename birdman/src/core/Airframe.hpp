@@ -91,6 +91,11 @@ public:
 
     bool addPart(Part part, std::string* error = nullptr);
     bool removeSubtree(const std::string& id, std::string* error = nullptr);
+    // 編集はコピー上で全グラフを検証し、成功時だけ反映する。部品IDの変更は禁止。
+    bool replacePart(const std::string& id, Part replacement, std::string* error = nullptr);
+    bool setMount(const std::string& id, Mount mount, std::string* error = nullptr);
+    bool setHardpointTransform(const std::string& partId, const std::string& hardpointId,
+                               Transform3 transform, std::string* error = nullptr);
 
     const Part* find(const std::string& id) const;
 
