@@ -4,6 +4,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <functional>
 #include <set>
@@ -298,6 +299,57 @@ std::vector<AirframeGraph::Placed> AirframeGraph::resolve() const {
     for (const auto& id : topologicalOrder) {
         const auto& partPlacements = placements.at(id);
         result.insert(result.end(), partPlacements.begin(), partPlacements.end());
+    }
+    return result;
+}
+
+MassBreakdown aggregateMass(const AirframeGraph& graph) {
+    MassBreakdown result;
+    const auto placed = graph.resolve();
+    if (placed.empty()) return result;
+
+#ifndef NDEBUG
+    std::set<int> analysisItems;
+    for (const auto& entry : graph.parts()) for (const auto& node : entry.second.massNodes) {
+        if (node.analysisItem >= 0) {
+            const bool unique = analysisItems.insert(node.analysisItem).second;
+            assert(unique && "Analysis::items index must occur in exactly one MassNode");
+        }
+    }
+#endif
+
+    struct Contribution {
+        double kg;
+        glm::dvec3 cg;
+        glm::dmat3 inertiaAtCg;
+    };
+    std::vector<Contribution> contributions;
+    glm::dmat3 mirror(1.0);
+    mirror[0][0] = -1.0;
+    for (const auto& instance : placed) {
+        if (instance.part->kind == PartKind::Unknown) continue;
+        const glm::dmat3 rotation(instance.world);
+        for (const auto& node : instance.part->massNodes) {
+            const glm::dvec3 localCg = instance.mirrored ? mirror * node.cgLocal : node.cgLocal;
+            const glm::dmat3 localI = instance.mirrored ? mirror * node.I0 * mirror : node.I0;
+            const glm::dvec3 worldCg(instance.world * glm::dvec4(localCg, 1.0));
+            const glm::dmat3 worldI = rotation * localI * glm::transpose(rotation);
+            contributions.push_back({node.kg, worldCg, worldI});
+            result.items.push_back({instance.part->id, node.kg, worldCg});
+            result.totalKg += node.kg;
+            result.cg += node.kg * worldCg;
+        }
+    }
+    if (result.totalKg <= 0.0) {
+        result.cg = glm::dvec3(0.0);
+        return result;
+    }
+    result.cg /= result.totalKg;
+    const glm::dmat3 identity(1.0);
+    for (const auto& contribution : contributions) {
+        const glm::dvec3 d = contribution.cg - result.cg;
+        result.I += contribution.inertiaAtCg
+            + contribution.kg * (glm::dot(d, d) * identity - glm::outerProduct(d, d));
     }
     return result;
 }
