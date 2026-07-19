@@ -9,6 +9,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <cmath>
+#include <limits>
 #if defined(_WIN32)
 #include <direct.h>
 #include <windows.h>
@@ -166,6 +167,7 @@ namespace {
 
 constexpr std::size_t kMaxLayoutParts = 512;
 constexpr std::size_t kMaxPartHardpoints = 256;
+constexpr std::size_t kMaxPartMassNodes = 256;
 
 void addWarning(AircraftJsonReport& report, std::string message) {
     report.warnings.push_back(std::move(message));
@@ -271,8 +273,13 @@ AirframeGraph parseLayout(const json::Value& layout, AircraftJsonReport& report)
             MassNode node;
             if (const json::Value* kg = mass.find("kg"); kg && kg->isNumber()) node.kg = kg->number;
             node.cgLocal = vectorField(&mass, "cg", report, massContext);
-            if (const json::Value* item = mass.find("analysisItem"); item && item->isNumber())
-                node.analysisItem = (int)std::lround(item->number);
+            if (const json::Value* item = mass.find("analysisItem"); item && item->isNumber()) {
+                const double value = item->number;
+                if (std::floor(value) == value && value >= -1.0
+                    && value <= (double)std::numeric_limits<int>::max())
+                    node.analysisItem = (int)value;
+                else addWarning(report, massContext + ".analysisItem must be -1 or a non-negative integer");
+            }
             if (const json::Value* inertia = mass.find("inertia")) {
                 if (!inertia->isArray() || inertia->array.size() != 9) {
                     addWarning(report, massContext + ".inertia must contain nine finite numbers");
@@ -289,6 +296,11 @@ AirframeGraph parseLayout(const json::Value& layout, AircraftJsonReport& report)
         };
         if (const json::Value* masses = source.find("masses")) {
             if (!masses->isArray()) addWarning(report, context + ".masses must be an array");
+            else if (masses->array.size() > kMaxPartMassNodes) {
+                addWarning(report, context + ".masses exceeds the maximum of "
+                    + std::to_string(kMaxPartMassNodes));
+                return AirframeGraph::fromUntrusted({});
+            }
             else for (std::size_t massIndex = 0; massIndex < masses->array.size(); ++massIndex)
                 readMass(masses->array[massIndex], context + ".masses[" + std::to_string(massIndex) + "]");
         } else if (const json::Value* mass = source.find("mass")) {
