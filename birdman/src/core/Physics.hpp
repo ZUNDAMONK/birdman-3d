@@ -4,6 +4,8 @@
 
 namespace bm {
 
+struct MassBreakdown;
+
 // 乱数 [0,1) — JSのMath.random()相当
 double frand();
 
@@ -15,6 +17,14 @@ double deckHeightAt(double x);
 
 // 空力定数パック (JS aeroPack)
 AircraftConstants aeroPack(const AircraftParams& st, const Analysis& a, const SimParams& prm);
+
+// カスタム部品グラフの質量特性を反映した空力定数パック。
+// referenceMass は同じ AircraftParams から生成した標準レイアウトの集約値で、
+// 分布慣性を保持しながらカスタム配置による慣性差分だけを適用する。
+AircraftConstants aeroPackCustomMass(const AircraftParams& st, const Analysis& a,
+                                     const SimParams& prm,
+                                     const MassBreakdown& customMass,
+                                     const MassBreakdown& referenceMass);
 
 // お遊びモード: 小型プロペラ機(超軽量動力機)の定数パック。
 // HPA設計解析を通さず、典型的な軽飛行機の値を直接構成する
