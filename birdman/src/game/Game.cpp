@@ -263,7 +263,7 @@ int Game::run() {
 void Game::rebuildAircraft() {
     an_ = analyze(st_, &prm_);
     graph_ = buildDefaultLayout(st_, an_);
-    r3d_.buildAircraft(st_, an_);
+    r3d_.buildAircraft(st_, an_, graph_);
 }
 
 void Game::setMode(const std::string& mode) {
