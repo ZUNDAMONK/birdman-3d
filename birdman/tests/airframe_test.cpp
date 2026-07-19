@@ -520,6 +520,46 @@ void aggregateMassTests() {
     check(near(bm::aggregateMass(invalid).totalKg, 0.0), "invalid graph aggregate is empty");
 }
 
+void aeroLayoutTests() {
+    bm::AircraftParams st;
+    const bm::Analysis an = bm::analyze(st);
+    const bm::AirframeGraph standard = bm::buildDefaultLayout(st, an);
+    const bm::AeroLayoutProperties base = bm::aggregateAeroLayout(standard);
+    check(base.valid, "default aero layout aggregates");
+    check(near(base.wingLEZ, an.wingLE, 1e-12)
+          && near(base.wingIncidenceDeg, st.incidence, 1e-12),
+          "default wing placement preserves legacy aerodynamic geometry");
+    check(near(base.hTailZ, an.xHT, 1e-12) && near(base.hAreaScale, 1.0, 1e-12)
+          && near(base.vTailZ, an.xVT, 1e-12) && near(base.vAreaScale, 1.0, 1e-12),
+          "default tail placement preserves legacy aerodynamic geometry");
+
+    bm::AirframeGraph aftTail = standard;
+    bm::Mount hMount = aftTail.find("tail.h")->mount;
+    hMount.offset.pos.z = 0.8;
+    check(aftTail.setMount("tail.h", hMount), "move horizontal tail for aero aggregation");
+    const bm::AeroLayoutProperties aft = bm::aggregateAeroLayout(aftTail);
+    check(aft.valid && aft.hTailZ > base.hTailZ + 0.7,
+          "horizontal-tail world position feeds aero layout");
+
+    bm::AirframeGraph twin = standard;
+    bm::Mount fin = twin.find("tail.v")->mount;
+    fin.parentId = "tail.h"; fin.hardpointId = "hp.tip"; fin.mirror = bm::MirrorMode::Pair;
+    check(twin.setMount("tail.v", fin), "mount twin fins for aero aggregation");
+    const bm::AeroLayoutProperties twinAero = bm::aggregateAeroLayout(twin);
+    check(twinAero.valid && near(twinAero.vAreaScale, 2.0, 1e-12),
+          "paired vertical tails double projected area");
+    check(near(twinAero.vTailZ, an.xHT + st.hChord * 0.4, 1e-12),
+          "paired vertical tails use resolved longitudinal position");
+
+    bm::AirframeGraph tilted = standard;
+    bm::Mount vMount = tilted.find("tail.v")->mount;
+    vMount.offset.rotDeg.z = 90.0;
+    check(tilted.setMount("tail.v", vMount), "tilt vertical tail for aero aggregation");
+    const bm::AeroLayoutProperties tiltedAero = bm::aggregateAeroLayout(tilted);
+    check(tiltedAero.valid && tiltedAero.vAreaScale < 1e-12,
+          "horizontal fin has negligible vertical-tail projection");
+}
+
 void designJsonV2Tests() {
     bm::AircraftParams saved;
     saved.span = 31.5;
@@ -700,6 +740,7 @@ int main() {
     atomicEditingTests();
     defaultLayoutTests();
     aggregateMassTests();
+    aeroLayoutTests();
     designJsonV2Tests();
     if (failures == 0) std::cout << "airframe_test: all checks passed\n";
     return failures == 0 ? 0 : 1;

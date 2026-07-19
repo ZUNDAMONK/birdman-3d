@@ -717,7 +717,8 @@ void Game::startSim() {
     } else if (customLayout_) {
         const MassBreakdown customMass = aggregateMass(graph_);
         const MassBreakdown referenceMass = aggregateMass(buildDefaultLayout(st_, an_));
-        liveC_ = aeroPackCustomMass(st_, an_, prm_, customMass, referenceMass);
+        const AeroLayoutProperties aeroLayout = aggregateAeroLayout(graph_);
+        liveC_ = aeroPackCustomLayout(st_, an_, prm_, customMass, referenceMass, aeroLayout);
     } else {
         liveC_ = aeroPack(st_, an_, prm_);
     }
@@ -746,7 +747,7 @@ void Game::startSim() {
     lapTime_ = -1;
     courseMsg_.clear();
     courseMsgTimer_ = 0;
-    if (an_.SM < 0) {
+    if (liveC_.a.SM < 0) {
         courseMsg_ = u8"静的不安定 — 操縦補助なしでは発散します";
         courseMsgTimer_ = 6;
     }

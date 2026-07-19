@@ -210,10 +210,11 @@ AircraftConstants aeroPack(const AircraftParams& st, const Analysis& a, const Si
     return c;
 }
 
-AircraftConstants aeroPackCustomMass(const AircraftParams& st, const Analysis& a,
-                                     const SimParams& prm,
-                                     const MassBreakdown& customMass,
-                                     const MassBreakdown& referenceMass) {
+static AircraftConstants aeroPackCustomImpl(const AircraftParams& st, const Analysis& a,
+                                            const SimParams& prm,
+                                            const MassBreakdown& customMass,
+                                            const MassBreakdown& referenceMass,
+                                            const AeroLayoutProperties* aeroLayout) {
     // 従来値を先に確保する。集約値が壊れていても飛行物理へ NaN/Inf を渡さない。
     const AircraftConstants legacy = aeroPack(st, a, prm);
     const auto finitePositive = [](double value) {
@@ -229,13 +230,32 @@ AircraftConstants aeroPackCustomMass(const AircraftParams& st, const Analysis& a
         && finitePositive(referenceMass.I[0][0])
         && finitePositive(referenceMass.I[1][1])
         && finitePositive(referenceMass.I[2][2]);
-    if (!valid || !finitePositive(a.W) || !finitePositive(a.MAC)
+    const bool aeroValid = !aeroLayout || (aeroLayout->valid
+        && std::isfinite(aeroLayout->wingLEZ)
+        && std::isfinite(aeroLayout->wingIncidenceDeg)
+        && std::isfinite(aeroLayout->hTailZ)
+        && std::isfinite(aeroLayout->hAreaScale) && aeroLayout->hAreaScale >= 0.0
+        && std::isfinite(aeroLayout->vTailZ)
+        && std::isfinite(aeroLayout->vAreaScale) && aeroLayout->vAreaScale >= 0.0);
+    if (!valid || !aeroValid
+        || !finitePositive(a.W) || !finitePositive(a.MAC)
         || !finitePositive(a.S) || !finitePositive(st.span)) return legacy;
 
     Analysis adjusted = a;
+    AircraftParams adjustedSt = st;
     const double massRatio = customMass.totalKg / a.W;
+    if (!finitePositive(massRatio)) return legacy;
     adjusted.W = customMass.totalKg;
     adjusted.xCG = customMass.cg.z;
+    if (aeroLayout) {
+        adjusted.wingLE = aeroLayout->wingLEZ;
+        adjusted.xAC = adjusted.wingLE + 0.25 * adjusted.MAC;
+        adjusted.xHT = aeroLayout->hTailZ;
+        adjusted.xVT = aeroLayout->vTailZ;
+        adjusted.Sh = a.Sh * std::max(0.0, aeroLayout->hAreaScale);
+        adjusted.Sv = a.Sv * std::max(0.0, aeroLayout->vAreaScale);
+        adjustedSt.incidence = aeroLayout->wingIncidenceDeg;
+    }
     adjusted.lh = adjusted.xHT - adjusted.xCG;
     adjusted.Vh = adjusted.Sh * adjusted.lh / (adjusted.S * adjusted.MAC);
     adjusted.Vv = adjusted.Sv * (adjusted.xVT - adjusted.xCG) / (adjusted.S * st.span);
@@ -244,7 +264,7 @@ AircraftConstants aeroPackCustomMass(const AircraftParams& st, const Analysis& a
     adjusted.SM = (adjusted.xNP - adjusted.xCG) / adjusted.MAC * 100.0;
     adjusted.V = a.V * std::sqrt(massRatio);
 
-    AircraftConstants result = aeroPack(st, adjusted, prm);
+    AircraftConstants result = aeroPack(adjustedSt, adjusted, prm);
     // Airframe: X=左右, Y=上下, Z=後方。
     // 6DOF: Ixx=ロール(前後軸), Iyy=ピッチ(左右軸), Izz=ヨー(上下軸)。
     // 質点グラフに未収録の翼・胴体分布慣性は legacy に残し、配置差分だけを加える。
@@ -255,6 +275,21 @@ AircraftConstants aeroPackCustomMass(const AircraftParams& st, const Analysis& a
     result.Iyy = std::max(legacy.Iyy * 0.05, legacy.Iyy + pitchDelta);
     result.Izz = std::max(legacy.Izz * 0.05, legacy.Izz + yawDelta);
     return result;
+}
+
+AircraftConstants aeroPackCustomMass(const AircraftParams& st, const Analysis& a,
+                                     const SimParams& prm,
+                                     const MassBreakdown& customMass,
+                                     const MassBreakdown& referenceMass) {
+    return aeroPackCustomImpl(st, a, prm, customMass, referenceMass, nullptr);
+}
+
+AircraftConstants aeroPackCustomLayout(const AircraftParams& st, const Analysis& a,
+                                       const SimParams& prm,
+                                       const MassBreakdown& customMass,
+                                       const MassBreakdown& referenceMass,
+                                       const AeroLayoutProperties& aeroLayout) {
+    return aeroPackCustomImpl(st, a, prm, customMass, referenceMass, &aeroLayout);
 }
 
 AircraftConstants funPlaneConstants(const SimParams& prm) {
