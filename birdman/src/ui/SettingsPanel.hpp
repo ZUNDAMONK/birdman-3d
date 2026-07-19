@@ -32,7 +32,7 @@ private:
     int tab_ = 0;                       // 0=シミュ, 1=風・突風
     Button tabSim_, tabWind_, bClose_;
     // シミュタブ(発進方式はサイトで自動決定のためボタンなし)
-    Button bSiteBiwa_, bSiteFuji_, bGo_, bRst_, bAuto_, bHold_, bGhost_, bPjit_, bSixdof_, bSound_, bStamina_, bFun_;
+    Button bSiteBiwa_, bSiteFuji_, bGo_, bRst_, bAuto_, bHold_, bGhost_, bPjit_, bSixdof_, bAssist_, bSound_, bStamina_, bFun_;
     std::vector<Slider> simSliders_;
     // 風タブ
     Button bGacha_, bSummer_, bTerrainWind_, bWindVis_, bRealThermal_;

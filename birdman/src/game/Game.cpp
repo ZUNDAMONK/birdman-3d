@@ -14,6 +14,11 @@ namespace bm {
 
 static const double PI = 3.14159265358979323846;
 
+static std::string physicsTag(bool sixdof, bool assist) {
+    if (!sixdof) return u8"[標準物理/常時補助相当]";
+    return std::string(u8"[拡張物理/補助") + (assist ? "ON]" : "OFF]");
+}
+
 int Game::run() {
     sf::ContextSettings ctx;
     ctx.depthBits = 24;
@@ -344,6 +349,8 @@ void Game::startSim() {
     simRes_.out.push_back(simSample(live_));
     simRes_.Vs = liveC_.Vs;
     simRes_.runway = runway;
+    simRes_.sixdof = prm_.sixdof;
+    simRes_.assist = prm_.assist;
     // ゴースト(自己ベスト再生)
     ghostShow_ = prm_.ghost && !runway && save_.best().valid && save_.best().path.size() > 5;
     ghostIdx_ = 0;
@@ -358,6 +365,10 @@ void Game::startSim() {
     lapTime_ = -1;
     courseMsg_.clear();
     courseMsgTimer_ = 0;
+    if (an_.SM < 0) {
+        courseMsg_ = u8"静的不安定 — 操縦補助なしでは発散します";
+        courseMsgTimer_ = 6;
+    }
     acPos_ = {0, runway ? 0.0 : deckHeightAt(live_.x), z0_ - live_.x};
     acRot_ = {0, -live_.psi, 0};   // 自由発進の機首方位を初期表示から反映(psi=0なら従来通り)
     if (live_.done) {   // 滑走路×脚なし → 即終了 (JS nogearと同じ)
@@ -380,7 +391,8 @@ void Game::stopSim() {
             // 中止=そこまでの距離が公式記録(実際の大会も着水/中断地点まで)
             const int wi = prm_.weather;
             courseMsg_ = career_.recordContest(wi >= 0 ? siteWeather(prm_.site)[wi].name : "-",
-                                               simActive_ ? live_.officialDist : 0.0, contestCost_);
+                                               simActive_ ? live_.officialDist : 0.0, contestCost_,
+                                               0, 0, prm_.sixdof, prm_.assist);
             courseMsgTimer_ = 8;
             prm_ = prmBackup_;
             contestActive_ = false;
@@ -493,6 +505,8 @@ void Game::finishSim() {
     simRes_.gearBroken = live_.gearBroken;
     simRes_.crashed = live_.crashed;
     simRes_.auto_ = live_.auto_;
+    simRes_.sixdof = prm_.sixdof;
+    simRes_.assist = prm_.assist;
     simRes_.offcourse = live_.offcourse;
     simRes_.nogear = live_.nogear;
     simRes_.summer = prm_.summer;
@@ -503,6 +517,8 @@ void Game::finishSim() {
     if (!simRes_.runway && simRes_.dist > 50) {
         BestRun rec;
         rec.dist = simRes_.dist;
+        rec.sixdof = simRes_.sixdof;
+        rec.assist = simRes_.assist;
         char nm[48];
         std::snprintf(nm, sizeof(nm), "%s/%.0fm", st_.planform.c_str(), st_.span);
         rec.name = nm;
@@ -552,7 +568,8 @@ void Game::finishSim() {
         const int wi = prm_.weather;
         const std::string wx = wi >= 0 ? siteWeather(prm_.site)[wi].name : "-";
         courseMsg_ = career_.recordContest(wx, simRes_.dist, contestCost_,
-                                           rank, (int)rivals_.size() + 1);
+                                           rank, (int)rivals_.size() + 1,
+                                           simRes_.sixdof, simRes_.assist);
         if (!bestRival.empty() && rank > 1) {
             char rb[120];
             std::snprintf(rb, sizeof(rb), u8"  (1位 %s %.0fm)", bestRival.c_str(), bestRivalDist);
@@ -690,6 +707,11 @@ void Game::startMission(int i) {
 
 void Game::startContest(double cost) {
     if (simActive_) return;
+    if (an_.SM < 2.0) {
+        courseMsg_ = u8"大会出場には静的安定余裕 SM 2%以上が必要です";
+        courseMsgTimer_ = 6;
+        return;
+    }
     prmBackup_ = prm_;           // 大会後に設定を復元
     contestActive_ = true;
     contestCost_ = cost;
@@ -1207,14 +1229,15 @@ std::string Game::buildFinMsg() const {
         std::snprintf(b, sizeof(b), u8" / 対気経路 %.0f m", simRes_.pathAir);
         fin += b;
     }
+    fin += " " + physicsTag(simRes_.sixdof, simRes_.assist);
     if (lapTime_ > 0) {
         std::snprintf(b, sizeof(b), u8" / 北パイロン周回 %d分%04.1f秒", (int)(lapTime_ / 60), std::fmod(lapTime_, 60));
         fin += b;
     }
     if (simRes_.newBest) fin += u8" ★自己ベスト更新!";
     else if (save_.best().valid && simRes_.dist > 0) {
-        std::snprintf(b, sizeof(b), u8" (自己ベスト %.0fm)", save_.best().dist);
-        fin += b;
+        std::snprintf(b, sizeof(b), u8" (自己ベスト %.0fm ", save_.best().dist);
+        fin += b + physicsTag(save_.best().sixdof, save_.best().assist) + ")";
     }
     for (const auto& bg : simRes_.badges) fin += " " + bg;
     return fin;
@@ -1333,6 +1356,9 @@ void Game::drawUI() {
         // メトリクスバー(下部・ツールバー直上)。ツールパネル展開中は隠す(重なり防止)
         if (!tools_.panelOpen())
             hud_.drawMetricsBar(window_, W, H - DesignTools::BAR_H - 64, st_, an_);
+        if (an_.SM < 0)
+            pillText(u8"静的不安定 — 操縦補助なしでは発散します", W / 2, 56, 15,
+                     theme::bad(), 1, true);
         // 設計パネル(部位クリックで開く左ドック)
         design_.draw(window_, font, W, H, (float)frameDt_);
         // ツールバー+ツールパネル(荷重/ポーラー/保存比較/リブ型紙)。

@@ -196,7 +196,9 @@ AircraftConstants aeroPack(const AircraftParams& st, const Analysis& a, const Si
         const double CLat = 2 * PI * ARh / (ARh + 2);
         c.Cma = -c.CLa * a.SM / 100;
         c.Cmq = -2 * 0.9 * CLat * a.Vh * (a.lh / MAC);
-        c.Cmde = (a.SM / 100) * elevAuth;
+        // 舵効きは静安定余裕とは独立。SM=0や負でも操舵方向が反転しないよう、
+        // 尾翼容積・舵面比・感度を含むelevAuthだけから決める。
+        c.Cmde = 0.15 * elevAuth;
         // ロール: 減衰・エルロン(3DOFのailRateと定常ロール率が一致するよう換算)・上反角。
         // 実効上反角 = 治具角 + 曲げたわみ分(荷重n比例)。梁解析(computeLoads)から取得し、
         // 飛行中はnに応じてstepSim6が毎ステップ再評価する(たわむ翼はロール安定が増す)
@@ -348,6 +350,53 @@ static void markSparFailure(FlightState& L, const AircraftConstants& c,
     char loc[96];
     std::snprintf(loc, sizeof(loc), u8" [%s・半翼%.0f%%位置]", mode, c.failStation * 100.0);
     L.failureMsg = reason + loc;
+}
+
+// Phase 4で意図的に残す近似:
+//  - 標準物理は速度・経路角・バンクを直接積分する経路モデル
+//  - 拡張物理も完全な機体軸u/v/w連成ではなく、姿勢角と角速度を追加した回転モデル
+//  - プロペラジャイロ、スピン/ディープストール、負側の非対称翼端失速はPhase 5以降
+static double effectiveCLmin(const AircraftConstants& c, const FlightState& L) {
+    const double base = -0.50 * c.CLmax;
+    return std::min(-0.15, base + 0.60 * c.flapDCL * L.flap);
+}
+
+static bool updateStructuralFailure(FlightState& L, const AircraftConstants& c, double dt) {
+    const double vr = L.V / c.VNE;
+    if (vr > 0.88) L.fatigue += (vr - 0.88) * (vr - 0.88) * 25.0 * dt;
+    if (L.n > 0.8 * c.nFail)
+        L.fatigue += (L.n / c.nFail - 0.8) * 0.8 * dt;
+    if (L.n < 0.8 * c.nFailNeg)
+        L.fatigue += (L.n / c.nFailNeg - 0.8) * 0.8 * dt;
+    if (L.fatigue >= 1.0) {
+        markSparFailure(L, c, u8"フラッター/繰返し荷重による主桁疲労破断");
+        return true;
+    }
+
+    const bool overPos = L.n > c.nFail;
+    const bool overNeg = L.n < c.nFailNeg;
+    if (overPos || overNeg) {
+        L.overNT += dt;
+        const double ratio = overPos ? L.n / c.nFail : L.n / c.nFailNeg;
+        if (L.overNT >= 0.15 || ratio > 1.15) {
+            char buf[160];
+            if (overPos)
+                std::snprintf(buf, sizeof(buf), u8"主桁折損(n=%.2f > 限界%.2f)", L.n, c.nFail);
+            else
+                std::snprintf(buf, sizeof(buf), u8"負荷重で主桁折損(n=%.2f < 限界%.2f)", L.n, c.nFailNeg);
+            markSparFailure(L, c, buf);
+            return true;
+        }
+    } else {
+        L.overNT = 0;
+    }
+    if (L.V > c.VNE) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), u8"超過速度でフラッター破壊(V=%.1f > VNE %.1f m/s)", L.V, c.VNE);
+        markSparFailure(L, c, buf);
+        return true;
+    }
+    return false;
 }
 
 double thermalCellVz(const SimParams& prm, double x, double yl) {
@@ -547,6 +596,7 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
     const double gustDCL = c.CLa * gustAlpha;
     stepThermal(L, prm);
     stepSteering(L, prm, dt);
+    L.eApplied = L.e; L.ailApplied = L.ail; L.rudApplied = L.rud;
     const double T = computeThrust(L, c, prm, dt);
 
     if (L.ground && prm.mode != "runway") {
@@ -732,10 +782,13 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
     // 鉛直速度フィードバックを0.10→0.16へ強化: 旧値では位相遅れが大きく、
     // エレベーター引きっぱなしで減衰しないフゴイド振動(V=5.8↔8.2の永久往復)に
     // 入っていた(診断で確認)。実機のフゴイドは弱いながら減衰する
-    double CL = CLl * std::min(1.0, (L.V / c.Vt) * (L.V / c.Vt)) + gustDCL
+    const double CLminE = effectiveCLmin(c, L);
+    const double CLraw = CLl * std::min(1.0, (L.V / c.Vt) * (L.V / c.Vt)) + gustDCL
               + hold - 0.16 * Vz + c.elevAuth * L.e
               + c.flapDCL * L.flap;
-    CL = clamp(CL, 0.05, CLmaxE);
+    const double negF = clamp((CLminE - CLraw) / 0.25, 0.0, 1.0);
+    double CL = clamp(CLraw, CLminE, CLmaxE);
+    if (negF > 0) CL *= 1.0 - 0.25 * negF;
     // ---- 失速(ストール)挙動 ----
     // 従来は失速速度以下でも抗力ペナルティのみで「失速寸前で永遠に耐える」人工挙動だった。
     // CL要求が実効CLmaxを超えたまま失速速度を割ると翼の流れが剥がれる:
@@ -756,39 +809,13 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
     CD += 0.010 * L.rud * L.rud + 0.004 * L.ail * L.ail;
     CD += c.flapDCD * L.flap * L.flap;   // フラップの形状抗力(舵角²に比例)
     L.Re = Re;
-    // ---- フラッター・疲労蓄積: VNE手前の振動と高荷重の繰返しが蓄積して破断 ----
-    {
-        const double vr = L.V / c.VNE;
-        if (vr > 0.88) L.fatigue += (vr - 0.88) * (vr - 0.88) * 25.0 * dt;
-        if (L.n > 0.8 * c.nFail) L.fatigue += (L.n / c.nFail - 0.8) * 0.8 * dt;
-        if (L.fatigue >= 1.0) {
-            markSparFailure(L, c, u8"フラッター/繰返し荷重による主桁疲労破断");
-            return;
-        }
-    }
-    // ---- 剛性モデル: 限界超過で破壊 ----
-    // 瞬間スパイク(乱流の1フレーム)では折れず、0.15秒の持続超過で折損。
-    // ただし限界の1.15倍を超えたら即断(現実の構造も短時間の僅かな超過には耐える)
-    char buf[160];
-    if (L.n > c.nFail) {
-        L.overNT += dt;
-        if (L.overNT >= 0.15 || L.n > 1.15 * c.nFail) {
-            std::snprintf(buf, sizeof(buf), u8"主桁折損(n=%.2f > 限界%.2f)", L.n, c.nFail);
-            markSparFailure(L, c, buf); return;
-        }
-    } else {
-        L.overNT = 0;
-    }
-    if (L.n < c.nFailNeg) { markSparFailure(L, c, u8"負荷重で主桁折損(押さえすぎ)"); return; }
-    if (L.V > c.VNE) {
-        std::snprintf(buf, sizeof(buf), u8"超過速度でフラッター破壊(V=%.1f > VNE %.1f m/s)", L.V, c.VNE);
-        markSparFailure(L, c, buf); return;
-    }
+    if (updateStructuralFailure(L, c, dt)) return;
     // ---- 運動方程式(3自由度) ----
     const double dV = (T - q * c.S * CD) / c.m - c.g * std::sin(L.gam);
     double dg = (lift * std::cos(L.phi) / c.m - c.g * std::cos(L.gam)) / std::max(L.V, 1.0);
     // 失速中は機首落ちを強制(揚力崩れに加えピッチングモーメントの失速崩れを表現)
     dg -= 0.35 * stallF;
+    dg += 0.30 * negF;   // 負側失速では揚力絶対値が崩れ、機首上げ方向へ回復
     // 経路角速度クランプはHPAのCL式パイロット暴走防止の人工制限。
     // 剛体翼のお遊び機は実機並みに機敏な引き起こし(着陸フレア)を許す
     dg = prm.funPlane ? clamp(dg, -1.0, 0.7) : clamp(dg, -0.6, 0.25);
@@ -841,7 +868,7 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
     if (L.t >= 3600 || L.officialDist >= 30000) L.done = true;
 }
 
-// ============ 6自由度モデル(実験) ============
+// ============ 拡張物理(回転モデル) ============
 // 標準モデルとの違い:
 //  - ピッチ姿勢thetaと迎角alphaを分離し、SM由来の復元モーメント・尾翼減衰で回転動力学を解く
 //  - ロールはエルロン/上反角効果のモーメント、ヨーは垂直尾翼の風見安定で駆動
@@ -891,56 +918,39 @@ void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, 
     const double CLmaxE = (c.CLmax + c.flapDCLmax * L.flap) * geL;
     const double astallE = c.astall
                          + ((c.flapDCLmax - c.flapDCL) * L.flap + (geL - 1) * c.CLmax) / c.CLa;
+    const double CLminE = effectiveCLmin(c, L);
+    // CL需要がCLminへ到達する迎角。フラップ揚力を差し引かないと、展開時に
+    // まだ正揚力の領域でも負側失速が早期発動してしまう。
+    const double astallNeg = (CLminE - c.CLcruise - c.flapDCL * L.flap) / c.CLa;
     // 短時間突風の初期荷重は3DOFと同じ線形ΔCLを使う。失速判定は機体姿勢由来の
     // 迎角に適用し、突風分はCLmaxまでの瞬間荷重として加える（ピッチモーメントは
     // 下のalphaAeroで突風を含むため、その後の6DOF応答は維持される）。
     double CL = c.CLcruise + c.CLa * L.alpha + c.flapDCL * L.flap;
-    double stallPen = 0;
+    double stallPen = 0, stallNegPen = 0;
     if (L.alpha > astallE) {
         // マッシュ(緩やかな失速): 実翼はCLmax超過後も揚力を大きくは失わない。
         // 急峻なCL崩壊は「揚力減→経路角低下→迎角増」の正帰還で深失速に
         // ロックする非物理挙動を生むため、緩勾配+強い機首下げで回復性を持たせる
         stallPen = L.alpha - astallE;
         CL = std::max(0.55, CLmaxE - 0.25 * c.CLa * stallPen);
+    } else if (L.alpha < astallNeg) {
+        stallNegPen = astallNeg - L.alpha;
+        CL = std::min(-0.25, CLminE + 0.25 * c.CLa * stallNegPen);
     }
     CL += c.CLa * alphaG;
-    CL = clamp(CL, -0.2, CLmaxE);
+    CL = clamp(CL, CLminE, CLmaxE);
     const double lift = q * S * CL;
     L.n = lift / c.W;
 
-    // ---- フラッター・疲労蓄積(標準と同一) ----
-    {
-        const double vr = L.V / c.VNE;
-        if (vr > 0.88) L.fatigue += (vr - 0.88) * (vr - 0.88) * 25.0 * dt;
-        if (L.n > 0.8 * c.nFail) L.fatigue += (L.n / c.nFail - 0.8) * 0.8 * dt;
-        if (L.fatigue >= 1.0) {
-            markSparFailure(L, c, u8"フラッター/繰返し荷重による主桁疲労破断");
-            return;
-        }
-    }
-    // ---- 破壊判定(標準と同一: 瞬間スパイクでは折れず0.15s持続 or 1.15倍超で折損) ----
-    char buf[160];
-    if (L.n > c.nFail) {
-        L.overNT += dt;
-        if (L.overNT >= 0.15 || L.n > 1.15 * c.nFail) {
-            std::snprintf(buf, sizeof(buf), u8"主桁折損(n=%.2f > 限界%.2f)", L.n, c.nFail);
-            markSparFailure(L, c, buf); return;
-        }
-    } else {
-        L.overNT = 0;
-    }
-    if (L.n < c.nFailNeg) { markSparFailure(L, c, u8"負荷重で主桁折損(押さえすぎ)"); return; }
-    if (L.V > c.VNE) {
-        std::snprintf(buf, sizeof(buf), u8"超過速度でフラッター破壊(V=%.1f > VNE %.1f m/s)", L.V, c.VNE);
-        markSparFailure(L, c, buf); return;
-    }
+    if (updateStructuralFailure(L, c, dt)) return;
 
     // ---- 抗力 ----
     const double Re = c.rho * L.V * c.chordRef / 1.81e-5;
     const double dProf = clamp(reTableInterp(c.afReT, c.afCdT, Re) - c.cdProfD, -0.004, 0.012);
     double CD = c.CD0 + dProf + CL * CL / (PI * c.AR * c.e) * groundEffect(L.h, c.span);
     CD += 0.010 * L.rud * L.rud + 0.004 * L.ail * L.ail;
-    CD += 1.2 * stallPen * stallPen + (stallPen > 0 ? 0.015 : 0.0);  // 失速後の剥離抗力
+    CD += 1.2 * (stallPen * stallPen + stallNegPen * stallNegPen)
+        + ((stallPen > 0 || stallNegPen > 0) ? 0.015 : 0.0);          // 正負失速後の剥離抗力
     CD += 0.4 * L.beta * L.beta;                                     // 横滑り抗力
     CD += c.flapDCD * L.flap * L.flap;                               // フラップの形状抗力
     L.Re = Re;
@@ -958,12 +968,13 @@ void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, 
             const double VzT = clamp(0.4 * (holdTgt - L.h), -0.6, 0.8);
             const double eCmd = clamp(0.5 * (VzT - Vz) - 2.0 * L.qRate, -0.8, 0.8);
             eEff = clamp(L.e + holdGain * eCmd, -1.0, 1.0);
-        } else {
+        } else if (prm.assist) {
             const double userFade = std::max(0.0, 1 - std::abs(L.e) * 2.5);
             const double ePilot = clamp(-0.12 * Vz - 1.5 * L.qRate, -0.7, 0.7);
             eEff = clamp(L.e + userFade * ePilot, -1.0, 1.0);
         }
     }
+    L.eApplied = eEff;
 
     // ---- ピッチ回転: 静安定(SM)・尾翼減衰・エレベーター・失速ピッチブレーク ----
     // 角速度減衰項(Cmq/Clp/Cnr)は半陰的に積分する: rate_new=(rate+外力·dt)/(1+減衰·dt)。
@@ -972,6 +983,7 @@ void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, 
         const double K = q * S * MAC / c.Iyy;
         double Cm = c.Cma * alphaAero + c.Cmde * eEff + c.flapCm * L.flap;   // フラップの機首下げ
         if (stallPen > 0) Cm += -0.9 * stallPen;        // 失速で機首下げ(回復性)
+        if (stallNegPen > 0) Cm += 0.9 * stallNegPen;    // 負側失速で機首上げ(回復性)
         const double damp = std::max(0.0, -c.Cmq * MAC / (2 * Vs2) * K);
         L.qRate = clamp((L.qRate + Cm * K * dt) / (1 + damp * dt), -1.8, 1.8);
         L.theta += L.qRate * dt;
@@ -983,9 +995,10 @@ void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, 
     // 暗黙のラダー協調: アドバースヨーによる横滑りβを打ち消す(ラダー入力でフェード)。
     // HPAは垂直尾翼が小さくβが大きく成長し、上反角効果がエルロンを打ち消して
     // ロールがほぼ効かなくなるため、実機同様の協調旋回を暗黙パイロットが行う
-    const double rFade = std::max(0.0, 1 - std::abs(L.rud) * 2.5);
+    const double rFade = prm.assist ? std::max(0.0, 1 - std::abs(L.rud) * 2.5) : 0.0;
     const double rudEff = clamp(L.rud + rFade * clamp(-2.5 * L.beta - 0.8 * L.rRate, -0.7, 0.7),
                                 -1.0, 1.0);
+    L.rudApplied = rudEff;
     // ---- ロール回転: エルロン・ラダー・上反角効果(機首右偏β→右ロール)・減衰 ----
     {
         // たわみ連成: 実効上反角(治具角+曲げ×n)からClbを毎ステップ再評価。
@@ -993,9 +1006,10 @@ void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, 
         const double Clb = c.CLa * clamp(c.dihBase + c.dihBend * L.n, -2.0, 15.0) * PI / 180 / 4;
         // エルロンを放したら水平へ戻す暗黙の操舵(3DOFのウィングレベラーと同じ操作感。
         // 入力でフェードアウト。エルロンなし機はClda=0のため従来通り上反角頼み)
-        const double aFade = std::max(0.0, 1 - std::abs(L.ail) * 2.5);
+        const double aFade = prm.assist ? std::max(0.0, 1 - std::abs(L.ail) * 2.5) : 0.0;
         const double ailEff = clamp(L.ail + aFade * clamp(-2.6 * L.phi - 2.0 * L.pRate, -0.85, 0.85),
                                     -1.0, 1.0);
+        L.ailApplied = ailEff;
         double Cl = c.Clda * ailEff + c.Cldr * rudEff + Clb * L.beta
                   + 0.02 * L.ty;                        // 乱流ロール外乱(Clp減衰は陰的)
         // 翼端失速のロール崩れ: 失速開始位置(LLT)が翼端側ほど左右差が

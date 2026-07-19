@@ -19,7 +19,7 @@ namespace bm {
 static const double PI = 3.14159265358979323846;
 
 void SaveData::load() {
-    // best.json: {"dist":123.4,"name":"...","path":[[x,h,yl],...]}
+    // best.json: 旧保存にphysics/assistが無い場合は標準物理・補助ONとして読む。
     std::ifstream f(savePath("best.json"));
     if (f) {
         std::stringstream ss; ss << f.rdbuf();
@@ -31,6 +31,10 @@ void SaveData::load() {
             size_t e = s.find('"', p + 8);
             if (e != std::string::npos) best_.name = s.substr(p + 8, e - p - 8);
         }
+        p = s.find("\"sixdof\":");
+        if (p != std::string::npos) best_.sixdof = s.compare(p + 10, 4, "true") == 0;
+        p = s.find("\"assist\":");
+        if (p != std::string::npos) best_.assist = s.compare(p + 9, 4, "true") == 0;
         p = s.find("\"path\":[");
         if (p != std::string::npos) {
             const char* c = s.c_str() + p + 8;
@@ -70,7 +74,9 @@ void SaveData::saveBest(const BestRun& b) {
     best_.valid = true;
     std::ofstream f(savePath("best.json"));
     if (!f) return;
-    f << "{\"dist\":" << b.dist << ",\"name\":\"" << b.name << "\",\"path\":[";
+    f << "{\"dist\":" << b.dist << ",\"name\":\"" << b.name
+      << "\",\"sixdof\":" << (b.sixdof ? "true" : "false")
+      << ",\"assist\":" << (b.assist ? "true" : "false") << ",\"path\":[";
     for (size_t i = 0; i < b.path.size(); i++) {
         if (i) f << ",";
         char buf[80];

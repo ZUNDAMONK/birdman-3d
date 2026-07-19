@@ -77,7 +77,8 @@ struct SimParams {
     double temp = 20, turb = 0.3, tod = 7.0;
     bool   summer = true, ghost = true, pjit = false;
     double thermal = 0.0;
-    bool   sixdof = false;              // 6自由度物理モデル(実験)
+    bool   sixdof = false;              // 拡張物理(回転モデル)。保存互換のためフィールド名は維持
+    bool   assist = true;                // 拡張物理の暗黙操縦補助。旧保存はONとして扱う
     bool   terrainWind = true;          // 地形風(比良おろし・岸サーマル)
     bool   windVis = true;              // 風の可視化(粒子表示)
     bool   stamina = false;             // 体力モデルを手動出力にも適用
@@ -191,6 +192,7 @@ struct FlightState {
     double officialX0 = 0, officialYl0 = 0;
     bool   officialInvalid = false;      // 発進不成立(nogear/離陸前overrun)は記録0
     double e = 0, ail = 0, rud = 0;
+    double eApplied = 0, ailApplied = 0, rudApplied = 0; // 実際に物理へ渡した舵(テスト/診断用)
     double eTgt = 0, ailTgt = 0, rudTgt = 0;
     double brake = 0;                    // 地上ブレーキ(0..1, キャッチャー相当)
     double pitchOfs = 0;                 // 可変ピッチのオフセット m/rev (Z/Xキー)
@@ -261,6 +263,7 @@ struct SimResult {
     double rollDist = 0;                 // 地上滑走の累積距離(overrunメッセージ用)
     std::string brkMsg;
     bool   auto_ = false;
+    bool   sixdof = false, assist = true;
     bool   summer = false;
     double tod = 7;
     double maxBank = 0;

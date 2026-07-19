@@ -118,7 +118,8 @@ void DesignTools::build(AircraftParams* st, SimParams* prm,
     bContest_.onClick = [this] {
         if (!cb_.career || !getAn_ || !getAn_()) return;
         const double cost = Career::totalCost(*st_, *getAn_());
-        if (cost <= cb_.career->budget() && cb_.career->lockViolations(*st_).empty() && cb_.onStartContest)
+        if (cost <= cb_.career->budget() && cb_.career->lockViolations(*st_).empty()
+            && getAn_()->SM >= 2.0 && cb_.onStartContest)
             cb_.onStartContest(cost);
     };
 }
@@ -381,19 +382,25 @@ void DesignTools::draw(sf::RenderTarget& rt, HUD& hud, float W, float H) {
             drawText(rt, font, u8"✕ " + lv, p.left + 12, ly, 11, BADC);
             ly += 16;
         }
+        if (an->SM < 2.0) {
+            drawText(rt, font, u8"✕ 大会出場には静的安定余裕 SM 2%以上が必要", p.left + 12, ly, 11, BADC);
+            ly += 16;
+        }
         // 出場ボタン
         std::snprintf(b, sizeof(b), u8"第%d回大会に出場する(天候は当日ガチャ・手動一発勝負)", cr.st.year);
         bContest_.label = b;
-        bContest_.enabled = cost <= bud && locks.empty();
+        bContest_.enabled = cost <= bud && locks.empty() && an->SM >= 2.0;
         bContest_.rect = {p.left + 12, p.top + PANEL_H - 44, 380, 32};
         bContest_.draw(rt, font);
         // 歴代成績
         const float hx = p.left + 470;
         drawText(rt, font, u8"歴代成績", hx, p.top + 32, 12, INK, 0, true);
-        drawText(rt, font, u8"年    天候         記録m    賞金", hx, p.top + 52, 10, INKSOFT);
+        drawText(rt, font, u8"年    天候         記録m   物理/補助  賞金", hx, p.top + 52, 10, INKSOFT);
         for (size_t i = 0; i < cr.st.hist.size() && i < 9; i++) {
             const auto& r = cr.st.hist[cr.st.hist.size() - 1 - i];
-            std::snprintf(b, sizeof(b), u8"%2d   %-10s  %7.0f   %.0f万円", r.year, r.wx.c_str(), r.dist, r.prize);
+            const char* tag = r.sixdof ? (r.assist ? u8"拡/ON" : u8"拡/OFF") : u8"標/常";
+            std::snprintf(b, sizeof(b), u8"%2d   %-10s  %7.0f   %-6s  %.0f万円",
+                          r.year, r.wx.c_str(), r.dist, tag, r.prize);
             drawText(rt, font, b, hx, p.top + 70 + i * 16, 11, INK);
         }
         if (cr.st.hist.empty())

@@ -54,6 +54,7 @@ void SettingsPanel::build(SimParams* prm, AircraftParams* st,
     bGhost_.onClick = [this] { prm_->ghost = !prm_->ghost; };
     bPjit_.onClick = [this] { prm_->pjit = !prm_->pjit; };
     bSixdof_.onClick = [this] { prm_->sixdof = !prm_->sixdof; };
+    bAssist_.onClick = [this] { if (prm_->sixdof) prm_->assist = !prm_->assist; };
     bSound_.onClick = [this] { if (cb_.onToggleSound) cb_.onToggleSound(); };
     bTerrainWind_.onClick = [this] { prm_->terrainWind = !prm_->terrainWind; };
     bWindVis_.onClick = [this] { prm_->windVis = !prm_->windVis; };
@@ -118,6 +119,7 @@ void SettingsPanel::syncLabels() {
     bTerrainWind_.enabled = !lock;
     bRealThermal_.enabled = !lock;
     bSixdof_.enabled = !lock;
+    bAssist_.enabled = prm_->sixdof && !lock;
     bStamina_.enabled = !lock;
     bFun_.enabled = !lock;
     bFun_.label = std::string(u8"お遊び: 小型プロペラ機(富士川専用) ") + (prm_->funPlane ? "ON" : "OFF");
@@ -132,8 +134,12 @@ void SettingsPanel::syncLabels() {
                                                 : std::string(u8"夏の大会モード: "))
                      + (prm_->summer ? "ON" : "OFF");
     bSummer_.style = prm_->summer ? 2 : 0;
-    bSixdof_.label = std::string(u8"物理: ") + (prm_->sixdof ? u8"6DOF(実験)" : u8"標準(JS互換)");
+    bSixdof_.label = std::string(u8"物理: ") + (prm_->sixdof ? u8"拡張物理(回転モデル)" : u8"標準物理(経路モデル)");
     bSixdof_.style = prm_->sixdof ? 2 : 0;
+    bAssist_.label = prm_->sixdof
+                   ? std::string(u8"操縦補助: ") + (prm_->assist ? "ON" : "OFF")
+                   : u8"操縦補助: 常時補助相当(経路モデル)";
+    bAssist_.style = prm_->sixdof && prm_->assist ? 2 : 0;
     const bool snd = cb_.soundOn ? cb_.soundOn() : true;
     bSound_.label = std::string(u8"サウンド: ") + (snd ? "ON" : "OFF");
     bSound_.style = snd ? 2 : 0;
@@ -167,7 +173,7 @@ bool SettingsPanel::handleEvent(const sf::Event& ev, sf::Vector2f m) {
     consumed |= tabWind_.handle(ev, m);
     consumed |= bClose_.handle(ev, m);
     if (tab_ == 0) {
-        for (Button* b : {&bSiteBiwa_, &bSiteFuji_, &bGo_, &bRst_, &bAuto_, &bHold_, &bGhost_, &bPjit_, &bSixdof_, &bSound_, &bStamina_, &bFun_})
+        for (Button* b : {&bSiteBiwa_, &bSiteFuji_, &bGo_, &bRst_, &bAuto_, &bHold_, &bGhost_, &bPjit_, &bSixdof_, &bAssist_, &bSound_, &bStamina_, &bFun_})
             consumed |= b->handle(ev, m);
         for (auto& s : simSliders_) consumed |= s.handle(ev, m);
     } else {
@@ -221,6 +227,7 @@ void SettingsPanel::draw(sf::RenderTarget& rt, const sf::Font& font, float H) {
         heading(u8"物理・サウンド");
         bSixdof_.rect = {x, y, w * 0.58f - 3, 28};
         bSound_.rect = {x + w * 0.58f + 3, y, w * 0.42f - 3, 28}; y += 34;
+        bAssist_.rect = {x, y, w, 28}; y += 34;
         bStamina_.rect = {x, y, w, 28}; y += 34;
         bFun_.rect = {x, y, w, 28}; y += 38;
         heading(u8"パラメータ");
@@ -246,7 +253,7 @@ void SettingsPanel::draw(sf::RenderTarget& rt, const sf::Font& font, float H) {
     bClose_.draw(rt, font);
     for (const auto& t : texts) drawText(rt, font, t.s, x, t.y, t.size, INKSOFT(), 0, t.bold);
     if (tab_ == 0) {
-        for (Button* b : {&bSiteBiwa_, &bSiteFuji_, &bGo_, &bRst_, &bAuto_, &bHold_, &bGhost_, &bPjit_, &bSixdof_, &bSound_, &bStamina_, &bFun_})
+        for (Button* b : {&bSiteBiwa_, &bSiteFuji_, &bGo_, &bRst_, &bAuto_, &bHold_, &bGhost_, &bPjit_, &bSixdof_, &bAssist_, &bSound_, &bStamina_, &bFun_})
             b->draw(rt, font);
         for (auto& s : simSliders_) s.draw(rt, font);
         drawText(rt, font, u8"操縦: ↑↓=エレベーター ←→=エルロン A/D=ラダー R/F=出力 G=フラップ Z/X=ペラピッチ",
