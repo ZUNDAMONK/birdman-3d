@@ -76,6 +76,12 @@ void miniJsonTests() {
     check(bm::vec3FromJson(value, v) && near(v, {1.0, 2.0, 3.0}), "vec3 JSON valid");
     bm::json::parse("[1,2]", value);
     check(!bm::vec3FromJson(value, v) && near(v, {1.0, 2.0, 3.0}), "vec3 JSON failure leaves value unchanged");
+
+    std::string tooDeep;
+    for (int i = 0; i < 70; ++i) tooDeep.push_back('[');
+    tooDeep += '0';
+    for (int i = 0; i < 70; ++i) tooDeep.push_back(']');
+    check(!bm::json::parse(tooDeep, value, &error), "JSON nesting depth is bounded");
 }
 
 void rotationTests() {
@@ -286,6 +292,29 @@ void atomicEditingTests() {
           "invalid hardpoint edit preserves original transform");
     check(!graph.setHardpointTransform("body", "missing", {}), "unknown hardpoint edit is rejected");
     check(!graph.replacePart("missing", {}), "unknown part replacement is rejected");
+
+    bm::AirframeGraph nestedPair;
+    bm::Part pairRoot = rootPart();
+    check(nestedPair.addPart(pairRoot), "nested pair root");
+    bm::Part pairParent = mounted("pair-parent", bm::PartKind::Wing, "body", "wing");
+    pairParent.mount.mirror = bm::MirrorMode::Pair;
+    pairParent.hardpoints.push_back({"pair-child", {}});
+    check(nestedPair.addPart(pairParent), "nested pair parent");
+    bm::Part pairChild = mounted("pair-child", bm::PartKind::Fairing, "pair-parent", "pair-child");
+    pairChild.mount.mirror = bm::MirrorMode::Pair;
+    check(!nestedPair.addPart(pairChild), "nested Pair insertion is rejected");
+    check(nestedPair.validate().empty() && nestedPair.resolve().size() == 3,
+          "nested Pair rejection preserves the valid graph");
+
+    bm::AirframeGraph untrustedNested = bm::AirframeGraph::fromUntrusted({pairRoot, pairParent, pairChild});
+    check(!untrustedNested.validate().empty() && untrustedNested.resolve().empty(),
+          "untrusted nested Pair is rejected before expansion");
+
+    bm::Mount nestedMount = graph.find("pod")->mount;
+    nestedMount.parentId = "wing";
+    nestedMount.hardpointId = "child";
+    nestedMount.mirror = bm::MirrorMode::Pair;
+    check(!graph.setMount("pod", nestedMount), "atomic edit rejects nested Pair");
 }
 
 const bm::AirframeGraph::Placed* normalPlacement(
@@ -405,6 +434,11 @@ void defaultLayoutTests() {
             for (const auto& mass : entry.second.massNodes) totalKg += mass.kg;
         check(near(totalKg, an.W, 1e-9), "boomwing layout mass total: " + mode);
     }
+
+    bm::AircraftParams invalid;
+    invalid.wingX = 1001.0;
+    const bm::AirframeGraph rejected = bm::buildDefaultLayout(invalid, bm::analyze(invalid));
+    check(rejected.resolve().empty(), "out-of-range generated layout fails safely");
 }
 
 void aggregateMassTests() {
@@ -512,6 +546,17 @@ void designJsonV2Tests() {
         check(report.layoutPresent && !report.layoutAccepted && !report.warnings.empty(),
               "invalid layout falls back " + std::to_string(i));
     }
+
+    std::string excessiveParts = R"({"schemaVersion":2,"layout":{"parts":[)";
+    for (int i = 0; i < 513; ++i) {
+        if (i) excessiveParts += ',';
+        excessiveParts += R"({"id":"p)" + std::to_string(i) + R"(","kind":"unknown"})";
+    }
+    excessiveParts += "]}}";
+    bm::AircraftParams excessiveParams;
+    const bm::AircraftJsonReport excessive = bm::aircraftFromJson(excessiveParts, excessiveParams);
+    check(excessive.layoutPresent && !excessive.layoutAccepted && !excessive.warnings.empty(),
+          "excessive layout part count falls back");
 
     bm::AircraftParams brokenParams;
     const bm::AircraftJsonReport broken = bm::aircraftFromJson(

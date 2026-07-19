@@ -263,6 +263,12 @@ int Game::run() {
 void Game::rebuildAircraft() {
     an_ = analyze(st_, &prm_);
     graph_ = buildDefaultLayout(st_, an_);
+    if (!graph_.validate().empty()) {
+        std::fprintf(stderr, "warning: invalid aircraft parameters; restoring the default aircraft\n");
+        st_ = AircraftParams{};
+        an_ = analyze(st_, &prm_);
+        graph_ = buildDefaultLayout(st_, an_);
+    }
     r3d_.buildAircraft(st_, an_, graph_);
 }
 
@@ -832,16 +838,17 @@ void Game::setFPV(bool on) {
 std::array<glm::dvec3, (size_t)BodyPart::Count> Game::bodyAnchors() const {
     std::array<glm::dvec3, (size_t)BodyPart::Count> a{};
     const auto placed = graph_.resolve();
-    auto origin = [&](const char* id) {
+    auto pointOnPart = [&](const char* id, const glm::dvec3& local = glm::dvec3(0.0)) {
         for (const auto& item : placed)
-            if (!item.mirrored && item.part->id == id) return glm::dvec3(item.world[3]);
+            if (!item.mirrored && item.part->id == id)
+                return glm::dvec3(item.world * glm::dvec4(local, 1.0));
         return glm::dvec3(0.0);
     };
-    a[(size_t)BodyPart::Wing] = origin("wing.main") + glm::dvec3(0.0, 0.0, an_.MAC * 0.5);
-    a[(size_t)BodyPart::Prop] = origin("prop.main");
-    a[(size_t)BodyPart::Cockpit] = origin("cockpit") + glm::dvec3(0.0, 1.0, 0.0);
-    a[(size_t)BodyPart::HTail] = origin("tail.h") + glm::dvec3(0.0, -0.02, 0.0);
-    a[(size_t)BodyPart::VTail] = origin("tail.v") + glm::dvec3(0.0, st_.vHeight * 0.5, 0.0);
+    a[(size_t)BodyPart::Wing] = pointOnPart("wing.main", {0.0, 0.0, an_.MAC * 0.5});
+    a[(size_t)BodyPart::Prop] = pointOnPart("prop.main");
+    a[(size_t)BodyPart::Cockpit] = pointOnPart("cockpit", {0.0, 1.0, 0.0});
+    a[(size_t)BodyPart::HTail] = pointOnPart("tail.h", {0.0, -0.02, 0.0});
+    a[(size_t)BodyPart::VTail] = pointOnPart("tail.v", {0.0, st_.vHeight * 0.5, 0.0});
     if (const Part* root = graph_.find("fuselage")) {
         for (const auto& hp : root->hardpoints) {
             if (hp.id == "hp.ui.tailbeam") {

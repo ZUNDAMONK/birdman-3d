@@ -1613,24 +1613,42 @@ static double afYAt(const std::vector<std::pair<double, double>>& v, double f) {
 void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
                                const AirframeGraph& graph) {
     if (acOpaque_) { glDeleteLists(acOpaque_, 1); glDeleteLists(acFilm_, 1); glDeleteLists(propList_, 1); }
+    acOpaque_ = acFilm_ = propList_ = 0;
     const Profile& AF = mainAirfoil();
     const auto layout = graph.resolve();
-    auto partPos = [&](const char* id) {
+    auto placement = [&](const char* id) -> const AirframeGraph::Placed* {
         for (const auto& placed : layout)
-            if (!placed.mirrored && placed.part->id == id) return glm::dvec3(placed.world[3]);
-        return glm::dvec3(0.0);
+            if (!placed.mirrored && placed.part->id == id) return &placed;
+        return nullptr;
     };
     const Part* root = graph.find("fuselage");
+    const auto* wingPlaced = placement("wing.main");
+    const auto* htailPlaced = placement("tail.h");
+    const auto* vtailPlaced = placement("tail.v");
+    const auto* propPlaced = placement("prop.main");
+    const auto* cockpitPlaced = placement("cockpit");
+    const auto* pilotPlaced = placement("pilot");
+    if (!root || !wingPlaced || !htailPlaced || !vtailPlaced || !propPlaced || !cockpitPlaced || !pilotPlaced)
+        return;
     auto hardpointPos = [&](const char* id) {
         for (const auto& hp : root->hardpoints)
             if (hp.id == id) return glm::dvec3(transformMatrix(hp.t)[3]);
         return glm::dvec3(0.0);
     };
-    const glm::dvec3 wingPos = partPos("wing.main");
-    const glm::dvec3 htailPos = partPos("tail.h");
-    const glm::dvec3 vtailPos = partPos("tail.v");
-    const glm::dvec3 propPos = partPos("prop.main");
-    const glm::dvec3 cockpitPos = partPos("cockpit");
+    auto correctionFrom = [](const glm::dmat4& world, const glm::dvec3& generatedOrigin) {
+        return world * glm::translate(glm::dmat4(1.0), -generatedOrigin);
+    };
+    const glm::dvec3 wingPos(wingPlaced->world[3]);
+    const glm::dvec3 htailPos(htailPlaced->world[3]);
+    const glm::dvec3 vtailPos(vtailPlaced->world[3]);
+    const glm::dvec3 propPos(propPlaced->world[3]);
+    const glm::dvec3 cockpitPos(cockpitPlaced->world[3]);
+    const glm::dmat4 htailCorrection = correctionFrom(htailPlaced->world, {0.0, htailPos.y, htailPos.z});
+    const glm::dmat4 vtailCorrection = correctionFrom(vtailPlaced->world, {0.0, vtailPos.y, vtailPos.z});
+    const glm::dmat4 pilotCorrection = correctionFrom(pilotPlaced->world, {0.0, 0.0, an.pilotCGx});
+    const auto* fairingPlaced = placement("fairing");
+    const glm::dmat4 fairingCorrection = fairingPlaced
+        ? correctionFrom(fairingPlaced->world, {0.0, 0.0, st.seatX}) : glm::dmat4(1.0);
     const double hWing = wingPos.y;
     const double hBoom = vtailPos.y;
     const double half = st.span / 2;
@@ -1638,6 +1656,8 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
     const double seat = cockpitPos.z;
     wingH_ = wingPos.y;
     wingZ_ = wingPos.z;
+    wingDrawTransform_ = correctionFrom(wingPlaced->world, {0.0, wingPos.y, wingPos.z});
+    propWorld_ = propPlaced->world;
     propH_ = propPos.y;
     propZ_ = propPos.z;
 
@@ -1744,8 +1764,9 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
         // 桁ルート(翼側の主桁中心と一致させる: 局所コード30%・翼型中心線)
         const Profile& AFr = mainAirfoil();
         const double upR = afYAt(AFr.up, 0.30), loR = afYAt(AFr.lo, 0.30);
-        glm::dvec3 sparRoot(0, hWing + 0.5 * (upR + loR) * st.rootChord,
-                            wingPos.z + 0.30 * st.rootChord);
+        const glm::dvec3 generatedSparRoot(0, hWing + 0.5 * (upR + loR) * st.rootChord,
+                                           wingPos.z + 0.30 * st.rootChord);
+        const glm::dvec3 sparRoot(wingDrawTransform_ * glm::dvec4(generatedSparRoot, 1.0));
         drawStrut(FT, sparRoot, 0.032, 0.032);
         drawStrut(RT, sparRoot, 0.024, 0.024);
         setColor(0x23282e);
@@ -1763,6 +1784,8 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
     // パイロット(体幹ポリライン。フェアリングの包含サイズ算出にも使う)
     std::vector<glm::dvec3> pilotBody;
     {
+        glPushMatrix();
+        glMultMatrixd(glm::value_ptr(pilotCorrection));
         setColor(0x2c5f9e);
         auto Pv = [&](double z, double y) { return glm::dvec3(0, y, z); };
         if (st.posture == "upright")
@@ -1781,8 +1804,9 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
         setColor(0x23282e);
         drawSphere(body[4], 0.06, 8, 6);
         drawStrut(body[4] + glm::dvec3(-0.16, 0, 0), body[4] + glm::dvec3(0.16, 0, 0), 0.02, 0.02, 6);
+        glPopMatrix();
         // 駆動系: クランク→プロペラ軸のチェーン/シャフトライン
-        glm::dvec3 crankP = body[4], propP = propPos;
+        glm::dvec3 crankP(pilotCorrection * glm::dvec4(body[4], 1.0)), propP = propPos;
         glm::dvec3 midP(0, clamp(crankP.y, 0.9, propH_), (crankP.z + propP.z) / 2);
         setColor(0x33383f);
         drawStrut(crankP, midP, st.drive == "shaft" ? 0.02 : 0.011, st.drive == "shaft" ? 0.02 : 0.011, 6);
@@ -1803,11 +1827,16 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
             if (placed.part->id == "gear.front") radius = st.gear == "tandem" ? 0.14 : 0.13;
             else if (placed.part->id == "gear.main" && st.gear == "mono") radius = 0.16;
             else if (placed.part->id == "gear.tail") radius = 0.07;
-            wheel(glm::dvec3(placed.world[3]), radius);
+            glPushMatrix();
+            glMultMatrixd(glm::value_ptr(placed.world));
+            wheel({0.0, 0.0, 0.0}, radius);
+            glPopMatrix();
         }
     }
     // 水平尾翼(薄い対称翼型ロフト)
     {
+        glPushMatrix();
+        glMultMatrixd(glm::value_ptr(htailCorrection));
         const Profile& TH = thinAirfoil();
         const double hHalf = st.hSpan / 2, hLE = htailPos.z - st.hChord * 0.4;
         const int N = 12;
@@ -1824,9 +1853,12 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
         setColor(0xe8590c);   // 全可動(制御面色)
         loftWing(TH, stn, st.elevRatio < 1 ? 1 - st.elevRatio : 0.0, 1.0, false);
         if (st.elevRatio < 1) { setColor(0xf4f8fc); loftWing(TH, stn, 0.0, 1 - st.elevRatio, false); }
+        glPopMatrix();
     }
     // 垂直尾翼(平板ポリゴン)
     {
+        glPushMatrix();
+        glMultMatrixd(glm::value_ptr(vtailCorrection));
         const double vx = vtailPos.z, vc = st.vChord, vh = st.vHeight;
         std::vector<std::pair<double,double>> sh;   // (z, y) 機体ローカル
         if (st.vShape == "swept") sh = {{-vc*0.2,0},{vc*0.55,vh},{vc*1.05,vh},{vc*0.8,0}};
@@ -1855,6 +1887,7 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
             glVertex3d(0.018, vtailPos.y + q0.y, vx + q0.x); glVertex3d(0.018, vtailPos.y + q2.y, vx + q2.x); glVertex3d(0.018, vtailPos.y + q3.y, vx + q3.x);
             glEnd();
         }
+        glPopMatrix();
     }
     // テールビーム翼
     if (st.boomWing != "none") {
@@ -1870,7 +1903,10 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
         for (const auto& placed : layout) {
             if (placed.part->id != "boomwing") continue;
             const int side = st.boomWing == "R" ? -1 : (placed.mirrored ? -1 : 1);
-            mkBW(side, glm::dvec3(placed.world[3]));
+            glPushMatrix();
+            glMultMatrixd(glm::value_ptr(placed.world));
+            mkBW(side, {0.0, 0.0, 0.0});
+            glPopMatrix();
         }
     }
     glEndList();
@@ -1878,7 +1914,9 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
     // ---- 半透明部(フェアリングのみ。翼フィルムはwingFilm_メッシュ側) ----
     acFilm_ = glGenLists(1);
     glNewList(acFilm_, GL_COMPILE);
-    if (st.fairing) {
+    if (st.fairing && fairingPlaced) {
+        glPushMatrix();
+        glMultMatrixd(glm::value_ptr(fairingCorrection));
         // 流線型の涙滴フェアリング: パイロット体幹ポリラインから包含要件を採取し、
         // 「先端は丸く(楕円ノーズ)→最大断面(胸〜腰)→後方へ滑らかに絞る(cosテーパー)」
         // の断面プロファイルでロフトする。サイズは姿勢ごとの体格を包含するよう自動決定。
@@ -1949,6 +1987,7 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
             for (int j = 0; j < NRAD; j++)
                 quad(ringPt(i, j), ringPt(i, j + 1), ringPt(i + 1, j + 1), ringPt(i + 1, j));
         glEnd();
+        glPopMatrix();
     }
     glEndList();
 
@@ -2319,6 +2358,8 @@ void Renderer3D::drawFlapHighlight(const AircraftParams& st, const Analysis& an)
     // 後縁30%相当(内翼はほぼ翼根コード)
     const double z0 = wingZ_ + st.rootChord * 0.68, z1 = wingZ_ + st.rootChord * 1.04;
     glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_CURRENT_BIT | GL_LINE_BIT);
+    glPushMatrix();
+    glMultMatrixd(glm::value_ptr(wingDrawTransform_));
     glDisable(GL_LIGHTING);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -2334,6 +2375,7 @@ void Renderer3D::drawFlapHighlight(const AircraftParams& st, const Analysis& an)
     glVertex3d(xw, yTop, z1);  glVertex3d(-xw, yTop, z1);
     glEnd();
     glDepthMask(GL_TRUE);
+    glPopMatrix();
     glPopAttrib();
     glEnable(GL_LIGHTING);
 }
@@ -2642,10 +2684,13 @@ void Renderer3D::drawFrame(const std::string& mode, const SimParams& prm, const 
         glRotated(acRot.x * 180 / PI, 1, 0, 0);
         glRotated(acRot.z * 180 / PI, 0, 0, 1);
         glCallList(acOpaque_);
+        glPushMatrix();
+        glMultMatrixd(glm::value_ptr(wingDrawTransform_));
         drawFlexMesh(wingOpq_);          // 主翼(たわみ変形)
+        glPopMatrix();
         // プロペラ(回転)
         glPushMatrix();
-        glTranslated(0, propH_, propZ_);
+        glMultMatrixd(glm::value_ptr(propWorld_));
         glRotated(propAngle * 180 / PI, 0, 0, 1);
         glCallList(propList_);
         glPopMatrix();
@@ -2654,7 +2699,10 @@ void Renderer3D::drawFrame(const std::string& mode, const SimParams& prm, const 
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glDepthMask(GL_FALSE);
         glCallList(acFilm_);
+        glPushMatrix();
+        glMultMatrixd(glm::value_ptr(wingDrawTransform_));
         drawFlexMesh(wingFilm_);         // 翼フィルム(たわみ変形)
+        glPopMatrix();
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);
         glPopMatrix();

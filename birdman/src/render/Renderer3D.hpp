@@ -116,6 +116,8 @@ private:
     unsigned waterTex_ = 0;
     double propH_ = 2.0, propZ_ = 0.35;           // プロペラ取付位置(機体ローカル)
     double wingH_ = 2.0, wingZ_ = 1.5;            // Layoutから解決した主翼基準位置
+    glm::dmat4 wingDrawTransform_{1.0};            // 旧座標生成→Layout worldの補正
+    glm::dmat4 propWorld_{1.0};                    // プロペラの完全なLayout world変換
     int vpW_ = 1280, vpH_ = 720;
     std::vector<CrashParticle> parts_;
     std::vector<CrashRing> rings_;

@@ -152,6 +152,7 @@ bool AirframeGraph::addPart(Part part, std::string* error) {
     if (part.mount.parentId.empty()) {
         if (!rootId_.empty()) { setError(error, "graph already has a root"); return false; }
         if (part.kind != PartKind::Fuselage) { setError(error, "root must be a fuselage"); return false; }
+        if (part.mount.mirror != MirrorMode::None) { setError(error, "root cannot use mirror pair"); return false; }
     } else {
         if (part.kind == PartKind::Fuselage) { setError(error, "fuselage may only be the root"); return false; }
         const Part* parent = find(part.mount.parentId);
@@ -159,6 +160,17 @@ bool AirframeGraph::addPart(Part part, std::string* error) {
         if (!findHardpoint(*parent, part.mount.hardpointId)) {
             setError(error, "missing hardpoint: " + part.mount.hardpointId);
             return false;
+        }
+        if (part.mount.mirror == MirrorMode::Pair) {
+            std::set<std::string> ancestors;
+            const Part* ancestor = parent;
+            while (ancestor && ancestors.insert(ancestor->id).second) {
+                if (ancestor->mount.mirror == MirrorMode::Pair) {
+                    setError(error, "nested mirror pair is not supported");
+                    return false;
+                }
+                ancestor = ancestor->mount.parentId.empty() ? nullptr : find(ancestor->mount.parentId);
+            }
         }
     }
     if (!validTransform(part.mount.offset)) { setError(error, "invalid mount transform"); return false; }
@@ -257,6 +269,8 @@ std::vector<AirframeGraph::ValidationError> AirframeGraph::validate() const {
         if (part.mount.parentId.empty()) {
             ++roots;
             if (part.kind != PartKind::Fuselage) errors.push_back({part.id, "root must be a fuselage"});
+            if (part.mount.mirror != MirrorMode::None)
+                errors.push_back({part.id, "root cannot use mirror pair"});
         } else {
             if (part.kind == PartKind::Fuselage) errors.push_back({part.id, "fuselage is not root"});
             const Part* parent = find(part.mount.parentId);
@@ -304,6 +318,24 @@ std::vector<AirframeGraph::ValidationError> AirframeGraph::validate() const {
         marks[id] = Mark::Done;
     };
     for (const auto& entry : parts_) visit(entry.first);
+
+    // Pairは機体中心面に対する全体ミラー。Pair祖先の下で再度Pairにすると
+    // 同一world変換が重複し、深い木では配置数が指数的に増えるため拒否する。
+    for (const auto& entry : parts_) {
+        const Part& part = entry.second;
+        if (part.mount.mirror != MirrorMode::Pair) continue;
+        std::set<std::string> ancestors;
+        std::string parentId = part.mount.parentId;
+        while (!parentId.empty() && ancestors.insert(parentId).second) {
+            const Part* parent = find(parentId);
+            if (!parent) break;
+            if (parent->mount.mirror == MirrorMode::Pair) {
+                errors.push_back({part.id, "nested mirror pair is not supported"});
+                break;
+            }
+            parentId = parent->mount.parentId;
+        }
+    }
     return errors;
 }
 
@@ -454,32 +486,34 @@ AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an) {
     for (int item : {3, 5, 9}) fuselage.massNodes.push_back(massAt(item, identity));
     if (st.gear == "none") fuselage.massNodes.push_back(massAt(7, identity));
     if (!st.fairing) fuselage.massNodes.push_back(massAt(8, identity));
-    graph.addPart(std::move(fuselage));
+    if (!graph.addPart(std::move(fuselage))) return {};
+    const Part* root = graph.find("fuselage");
+    if (!root) return {};
 
     auto addWithMass = [&](Part part, int item, const Transform3& hardpointTransform) {
         const glm::dmat4 world = transformMatrix(hardpointTransform) * transformMatrix(part.mount.offset);
         part.massNodes.push_back(massAt(item, world));
-        graph.addPart(std::move(part));
+        return graph.addPart(std::move(part));
     };
 
     Part wing = child("wing.main", PartKind::Wing, "hp.wing");
-    addWithMass(std::move(wing), 0, graph.find("fuselage")->hardpoints[0].t);
+    if (!addWithMass(std::move(wing), 0, root->hardpoints[0].t)) return {};
     Part htail = child("tail.h", PartKind::HTail, "hp.tail.h");
-    addWithMass(std::move(htail), 1, graph.find("fuselage")->hardpoints[1].t);
+    if (!addWithMass(std::move(htail), 1, root->hardpoints[1].t)) return {};
     Part vtail = child("tail.v", PartKind::VTail, "hp.tail.v");
-    addWithMass(std::move(vtail), 2, graph.find("fuselage")->hardpoints[2].t);
+    if (!addWithMass(std::move(vtail), 2, root->hardpoints[2].t)) return {};
     Part prop = child("prop.main", PartKind::Prop, "hp.prop");
-    addWithMass(std::move(prop), 6, graph.find("fuselage")->hardpoints[3].t);
+    if (!addWithMass(std::move(prop), 6, root->hardpoints[3].t)) return {};
     Part cockpit = child("cockpit", PartKind::Cockpit, "hp.cockpit");
-    addWithMass(std::move(cockpit), 4, graph.find("fuselage")->hardpoints[4].t);
+    if (!addWithMass(std::move(cockpit), 4, root->hardpoints[4].t)) return {};
 
     Part pilot = child("pilot", PartKind::Pilot, "hp.cockpit");
     pilot.mount.offset.pos.z = an.pilotCGx - st.seatX;
-    addWithMass(std::move(pilot), 10, graph.find("fuselage")->hardpoints[4].t);
+    if (!addWithMass(std::move(pilot), 10, root->hardpoints[4].t)) return {};
 
     if (st.fairing) {
         Part fairing = child("fairing", PartKind::Fairing, "hp.cockpit");
-        addWithMass(std::move(fairing), 8, graph.find("fuselage")->hardpoints[4].t);
+        if (!addWithMass(std::move(fairing), 8, root->hardpoints[4].t)) return {};
     }
 
     auto addGear = [&](std::string id, std::string hardpoint, MirrorMode mirror, bool carriesMass) {
@@ -489,23 +523,23 @@ AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an) {
         const auto it = std::find_if(root->hardpoints.begin(), root->hardpoints.end(),
             [&](const Hardpoint& value) { return value.id == hardpoint; });
         if (carriesMass) gear.massNodes.push_back(massAt(7, transformMatrix(it->t)));
-        graph.addPart(std::move(gear));
+        return graph.addPart(std::move(gear));
     };
     if (st.gear == "tri") {
-        addGear("gear.front", "hp.gear.front", MirrorMode::None, true);
-        addGear("gear.main", "hp.gear.main.tri", MirrorMode::Pair, false);
+        if (!addGear("gear.front", "hp.gear.front", MirrorMode::None, true)) return {};
+        if (!addGear("gear.main", "hp.gear.main.tri", MirrorMode::Pair, false)) return {};
     } else if (st.gear == "tandem") {
-        addGear("gear.front", "hp.gear.front", MirrorMode::None, true);
-        addGear("gear.rear", "hp.gear.rear", MirrorMode::None, false);
+        if (!addGear("gear.front", "hp.gear.front", MirrorMode::None, true)) return {};
+        if (!addGear("gear.rear", "hp.gear.rear", MirrorMode::None, false)) return {};
     } else if (st.gear == "mono") {
-        addGear("gear.main", "hp.gear.main.mono", MirrorMode::None, true);
-        addGear("gear.tail", "hp.gear.tail", MirrorMode::None, false);
+        if (!addGear("gear.main", "hp.gear.main.mono", MirrorMode::None, true)) return {};
+        if (!addGear("gear.tail", "hp.gear.tail", MirrorMode::None, false)) return {};
     }
 
     if (st.boomWing != "none") {
         Part boomWing = child("boomwing", PartKind::BoomWing, "hp.boomwing");
         boomWing.mount.mirror = st.boomWing == "LR" ? MirrorMode::Pair : MirrorMode::None;
-        graph.addPart(std::move(boomWing));
+        if (!graph.addPart(std::move(boomWing))) return {};
     }
     return graph;
 }

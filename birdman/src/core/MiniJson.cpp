@@ -24,6 +24,8 @@ const Value* Value::find(const std::string& key) const {
 
 namespace {
 
+constexpr std::size_t kMaxJsonDepth = 64;
+
 class Parser {
 public:
     Parser(const std::string& text, ParseError* error) : text_(text), error_(error) {}
@@ -77,7 +79,8 @@ private:
         return true;
     }
 
-    bool value(Value& out) {
+    bool value(Value& out, std::size_t depth = 0) {
+        if (depth > kMaxJsonDepth) return fail("maximum nesting depth exceeded");
         if (pos_ >= text_.size()) return fail("expected value");
         switch (text_[pos_]) {
         case 'n':
@@ -94,8 +97,8 @@ private:
             if (!string(s)) return false;
             out = Value::stringValue(std::move(s)); return true;
         }
-        case '[': return array(out);
-        case '{': return object(out);
+        case '[': return array(out, depth);
+        case '{': return object(out, depth);
         default: return number(out);
         }
     }
@@ -207,14 +210,14 @@ private:
         return true;
     }
 
-    bool array(Value& out) {
+    bool array(Value& out, std::size_t depth) {
         consume('[');
         Value::Array a;
         skipWs();
         if (consume(']')) { out = Value::arrayValue(std::move(a)); return true; }
         while (true) {
             Value v;
-            if (!value(v)) return false;
+            if (!value(v, depth + 1)) return false;
             a.push_back(std::move(v));
             skipWs();
             if (consume(']')) break;
@@ -225,7 +228,7 @@ private:
         return true;
     }
 
-    bool object(Value& out) {
+    bool object(Value& out, std::size_t depth) {
         consume('{');
         Value::Object o;
         skipWs();
@@ -237,7 +240,7 @@ private:
             if (!consume(':')) return fail("expected ':'");
             skipWs();
             Value v;
-            if (!value(v)) return false;
+            if (!value(v, depth + 1)) return false;
             if (!o.emplace(std::move(key), std::move(v)).second)
                 return fail("duplicate object key");
             skipWs();
