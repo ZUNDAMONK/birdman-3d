@@ -13,8 +13,15 @@ struct DesignEntry {
     double dist = -1;               // 最後のシミュ距離(-1=なし)
 };
 
+struct AircraftJsonReport {
+    int schemaVersion = 1;
+    bool layoutPresent = false;
+    bool layoutAccepted = false;
+    std::vector<std::string> warnings;
+};
+
 std::string aircraftToJson(const AircraftParams& st);
-void aircraftFromJson(const std::string& json, AircraftParams& st);
+AircraftJsonReport aircraftFromJson(const std::string& json, AircraftParams& st);
 
 // exeのあるディレクトリ(作業ディレクトリに依存しないリソース解決用)
 std::string exeDirPath();
