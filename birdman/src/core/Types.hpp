@@ -151,6 +151,7 @@ struct AircraftConstants {
     std::string failMode;
     double CP = 270, Vdesign = 8, chordRef = 0.8, Vmp = 8, Pmin = 250;
     bool   hasGear = true;
+    bool   hasPilot = true;
     // stepSimが必要とする機体形状(JSはグローバルstを参照していた)
     double span = 28, propDia = 2.8;
     double wheelBase = 2.0;              // 地上ステア用の前後輪間隔(第6弾。aeroPackで胴体長から概算)
@@ -182,6 +183,7 @@ struct AircraftConstants {
     double tipStall = 0.5;                       // 失速開始スパン位置(LLT, 1=翼端)
     double dihBase = 1.5, dihBend = 1.0;         // 上反角: 治具角 + 1gたわみ分(deg)
     double heatFac = 1.0;                        // 暑熱によるCP低下係数
+    double pilotEnergyFactor = 1.0;               // 操縦席形状による代謝コスト倍率
 };
 
 // ---- 飛行状態 (JSの L 相当) ----

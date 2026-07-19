@@ -255,7 +255,17 @@ static AircraftConstants aeroPackCustomImpl(const AircraftParams& st, const Anal
         && std::isfinite(designPhysics->fairingCdReduction)
         && designPhysics->fairingCdReduction >= 0.0
         && std::isfinite(designPhysics->supportDragAreaM2)
-        && designPhysics->supportDragAreaM2 >= 0.0);
+        && designPhysics->supportDragAreaM2 >= 0.0
+        && (!designPhysics->compositionValid
+            || (std::isfinite(designPhysics->pilotPowerFactor)
+                && designPhysics->pilotPowerFactor >= 0.0
+                && designPhysics->pilotPowerFactor <= 1.0
+                && std::isfinite(designPhysics->pilotEnergyFactor)
+                && designPhysics->pilotEnergyFactor >= 1.0
+                && designPhysics->pilotEnergyFactor <= 1.60
+                && (designPhysics->gearType == "mono"
+                    || designPhysics->gearType == "tri"
+                    || designPhysics->gearType == "tandem"))));
     if (!valid || !aeroValid || !designValid
         || !finitePositive(a.W) || !finitePositive(a.MAC)
         || !finitePositive(a.S) || !finitePositive(st.span)) return legacy;
@@ -283,6 +293,8 @@ static AircraftConstants aeroPackCustomImpl(const AircraftParams& st, const Anal
         adjustedSt.fairing = false;
         adjustedSt.cd0Add += designPhysics->supportDragAreaM2 / adjusted.S
                            - designPhysics->fairingCdReduction;
+        if (designPhysics->compositionValid)
+            adjustedSt.gear = designPhysics->hasGear ? designPhysics->gearType : "none";
         double wingKg = 0.0;
         for (const auto& item : customMass.items)
             if (item.partId == "wing.main") wingKg += item.kg;
@@ -311,6 +323,11 @@ static AircraftConstants aeroPackCustomImpl(const AircraftParams& st, const Anal
     adjusted.V = a.V * std::sqrt(massRatio);
 
     AircraftConstants result = aeroPack(adjustedSt, adjusted, prm);
+    if (designPhysics && designPhysics->compositionValid) {
+        result.hasPilot = designPhysics->hasPilot;
+        result.CP *= designPhysics->pilotPowerFactor;
+        result.pilotEnergyFactor = designPhysics->pilotEnergyFactor;
+    }
     if (designPhysics) {
         const double torsionSection = designPhysics->spar.section == "box" ? 1.25
                                     : designPhysics->spar.section == "i-beam" ? 0.35 : 1.0;
@@ -613,7 +630,8 @@ static void staminaStores(FlightState& L, const AircraftConstants& c, const SimP
     else         L.wbal = std::min(wcap, L.wbal + (CPe - P) * 0.30 * dt);
     L.wbal = clamp(L.wbal, 0.0, wcap);
     const double basal = 0.12 * c.CP;   // 基礎代謝: 何もしなくても消費する分
-    L.gly = std::max(0.0, L.gly - (basal + std::max(0.0, P)) * dt / GLY_CAP);
+    const double effort = std::max(0.0, P) * c.pilotEnergyFactor;
+    L.gly = std::max(0.0, L.gly - (basal + effort) * dt / GLY_CAP);
 }
 
 // 手動時: W'/グリコーゲンで要求出力を制限しつつ体力を更新
@@ -661,6 +679,8 @@ static double computeThrust(FlightState& L, const AircraftConstants& c, const Si
         if (prm.stamina) P = staminaLimit(L, c, prm, P, dt);
         L.Pnow = P;
     }
+    // パイロットのないカスタム人力機は、体力設定の有無にかかわらず駆動できない。
+    if (!prm.funPlane && !c.hasPilot) { P = 0.0; L.Pnow = 0.0; }
     // 駆動伝達後の軸出力
     const double Pshaft = std::max(0.0, P) * c.driveEff;
     // BEMT: 軸出力と対気速度から回転数と推力を解く。

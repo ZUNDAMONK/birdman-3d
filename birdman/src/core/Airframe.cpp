@@ -562,6 +562,60 @@ DesignPhysicsProperties aggregateDesignPhysics(const AirframeGraph& graph) {
     return result;
 }
 
+DesignPhysicsProperties aggregateDesignPhysics(const AirframeGraph& graph,
+                                               const AircraftParams& st) {
+    DesignPhysicsProperties result = aggregateDesignPhysics(graph);
+    if (!result.valid) return result;
+
+    result.compositionValid = true;
+    const Part* pilot = graph.find("pilot");
+    result.hasPilot = pilot != nullptr;
+    result.pilotPowerFactor = result.hasPilot ? 1.0 : 0.0;
+    result.pilotEnergyFactor = 1.0;
+    if (pilot && pilot->design.pilot) {
+        PilotStationDesign base;
+        if (st.posture == "upright") base = {0.68, -0.30, 0.80, -0.28, 0.42};
+        else if (st.posture == "semi") base = {0.62, -0.50, 0.85, -0.80, 0.58};
+        else base = {0.60, -0.55, 0.92, -0.95, 0.68};
+        const PilotStationDesign& value = *pilot->design.pilot;
+        const auto reach = [](const PilotStationDesign& p, bool crank) {
+            const double z = crank ? p.crankZM : p.pedalZM;
+            const double y = crank ? p.crankHeightM : p.pedalHeightM;
+            return std::hypot(z, y - p.seatHeightM);
+        };
+        const double pedalError = (reach(value, false) - reach(base, false))
+                                / std::max(0.25, reach(base, false));
+        const double crankError = (reach(value, true) - reach(base, true))
+                                / std::max(0.25, reach(base, true));
+        const double linkage = std::hypot(value.pedalZM - value.crankZM,
+                                          value.pedalHeightM - value.crankHeightM);
+        const double baseLinkage = std::hypot(base.pedalZM - base.crankZM,
+                                              base.pedalHeightM - base.crankHeightM);
+        const double linkageError = (linkage - baseLinkage) / std::max(0.20, baseLinkage);
+        const double strain = 0.45 * pedalError * pedalError
+                            + 0.35 * crankError * crankError
+                            + 0.20 * linkageError * linkageError;
+        result.pilotPowerFactor = std::clamp(std::exp(-0.55 * strain), 0.60, 1.0);
+        result.pilotEnergyFactor = std::clamp(1.0 + 0.45 * strain, 1.0, 1.60);
+    }
+
+    int gearCount = 0;
+    bool front = false, rear = false, main = false, tail = false;
+    for (const auto& entry : graph.parts()) {
+        if (entry.second.kind != PartKind::Gear) continue;
+        ++gearCount;
+        front = front || entry.first.find("front") != std::string::npos;
+        rear = rear || entry.first.find("rear") != std::string::npos;
+        main = main || entry.first.find("main") != std::string::npos;
+        tail = tail || entry.first.find("tail") != std::string::npos;
+    }
+    result.hasGear = gearCount > 0;
+    if (main && tail) result.gearType = "mono";
+    else if (front && main) result.gearType = "tri";
+    else result.gearType = "tandem";
+    return result;
+}
+
 AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an) {
     AirframeGraph graph;
     const double hWing = st.posture == "upright" ? 2.4 : 2.0;

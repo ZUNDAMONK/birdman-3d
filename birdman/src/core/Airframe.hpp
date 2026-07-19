@@ -187,10 +187,19 @@ struct DesignPhysicsProperties {
     SparDesign spar;
     double fairingCdReduction = 0.0;
     double supportDragAreaM2 = 0.0;
+    bool compositionValid = false;
+    bool hasPilot = true;
+    bool hasGear = true;
+    std::string gearType = "tandem";
+    double pilotPowerFactor = 1.0;
+    double pilotEnergyFactor = 1.0;
 };
 
 // 部品固有設計から梁解析用桁仕様と寄生抗力補正を集約する。
 DesignPhysicsProperties aggregateDesignPhysics(const AirframeGraph& graph);
+// 姿勢別の標準操縦席を基準に、部品構成と人間工学係数も集約する。
+DesignPhysicsProperties aggregateDesignPhysics(const AirframeGraph& graph,
+                                               const AircraftParams& st);
 
 // 既存パラメータを真実の源として、決定的な標準機Layoutを生成する。
 AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an);

@@ -257,6 +257,55 @@ int main() {
           && near(sparFallback.nFail, c.nFail, 1e-12),
           "non-finite spar fields fall back even when marked valid");
 
+    // ---- Phase 0C-4: 部品構成とパイロット人間工学を出力・体力へ接続 ----
+    const DesignPhysicsProperties composedStandard = aggregateDesignPhysics(standardLayout, st);
+    const AircraftConstants ergonomicStandard = aeroPackCustomDesign(
+        st, a, prm, referenceMass, referenceMass, standardAero, composedStandard);
+    check(composedStandard.compositionValid && composedStandard.hasPilot
+          && composedStandard.hasGear
+          && near(ergonomicStandard.CP, c.CP, 1e-12)
+          && near(ergonomicStandard.pilotEnergyFactor, 1.0, 1e-12),
+          "default pilot station preserves legacy power and energy cost");
+
+    AirframeGraph strainedPilot = standardLayout;
+    Part pilotPart = *strainedPilot.find("pilot");
+    pilotPart.design.pilot->pedalZM -= 1.0;
+    pilotPart.design.pilot->crankHeightM += 0.55;
+    check(strainedPilot.replacePart("pilot", pilotPart),
+          "physics fixture creates strained pilot station");
+    const DesignPhysicsProperties strainedDesign = aggregateDesignPhysics(strainedPilot, st);
+    const AircraftConstants strainedC = aeroPackCustomDesign(
+        st, a, prm, referenceMass, referenceMass, standardAero, strainedDesign);
+    check(strainedC.CP < c.CP && strainedC.pilotEnergyFactor > 1.0,
+          "strained pedal and crank geometry reduces power and increases energy cost");
+
+    AirframeGraph pilotless = standardLayout;
+    check(pilotless.removeSubtree("pilot"), "physics fixture removes pilot");
+    const AircraftConstants pilotlessC = aeroPackCustomDesign(
+        st, a, prm, aggregateMass(pilotless), referenceMass,
+        aggregateAeroLayout(pilotless), aggregateDesignPhysics(pilotless, st));
+    check(!pilotlessC.hasPilot && near(pilotlessC.CP, 0.0, 1e-12),
+          "custom aircraft without pilot cannot generate human power");
+    SimParams pilotlessPrm = prm;
+    pilotlessPrm.P = 350.0;
+    pilotlessPrm.stamina = false;
+    FlightState pilotlessFlight = makeInitialState(pilotlessC, pilotlessPrm, 0.0);
+    stepSim(pilotlessFlight, pilotlessC, pilotlessPrm, 0.02);
+    check(near(pilotlessFlight.Pnow, 0.0, 1e-12),
+          "pilot absence blocks manual power even when stamina model is disabled");
+
+    AirframeGraph gearless = standardLayout;
+    std::vector<std::string> gearIds;
+    for (const auto& entry : gearless.parts())
+        if (entry.second.kind == PartKind::Gear) gearIds.push_back(entry.first);
+    for (const auto& id : gearIds) check(gearless.removeSubtree(id), "physics fixture removes gear");
+    const DesignPhysicsProperties gearlessDesign = aggregateDesignPhysics(gearless, st);
+    const AircraftConstants gearlessC = aeroPackCustomDesign(
+        st, a, prm, aggregateMass(gearless), referenceMass,
+        aggregateAeroLayout(gearless), gearlessDesign);
+    check(!gearlessDesign.hasGear && !gearlessC.hasGear,
+          "custom aircraft graph controls landing gear physics");
+
     // ---- computePolar ----
     PolarResult pol = computePolar(st, a, prm);
     std::printf("[polar] Vs=%.3f  minP=%.1fW @%.1fm/s  L/Dmax=%.2f @%.1fm/s  Dp=%.2fN Di=%.2fN\n\n",
