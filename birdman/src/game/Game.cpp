@@ -712,7 +712,15 @@ void Game::startSim() {
     }
     // 発進方式はサイトで一意: 琵琶湖=プラットフォーム / 富士川=滑走路
     prm_.mode = prm_.site == "fujikawa" ? "runway" : "platform";
-    liveC_ = prm_.funPlane ? funPlaneConstants(prm_) : aeroPack(st_, an_, prm_);
+    if (prm_.funPlane) {
+        liveC_ = funPlaneConstants(prm_);
+    } else if (customLayout_) {
+        const MassBreakdown customMass = aggregateMass(graph_);
+        const MassBreakdown referenceMass = aggregateMass(buildDefaultLayout(st_, an_));
+        liveC_ = aeroPackCustomMass(st_, an_, prm_, customMass, referenceMass);
+    } else {
+        liveC_ = aeroPack(st_, an_, prm_);
+    }
     const bool runway = prm_.mode == "runway";
     // 富士川: 自由発進位置(startPos)ぶん発進原点をずらす。startHdgはmakeInitialStateがpsiへ反映
     prm_.startPos = clamp(prm_.startPos, site::FUJI_START_POS_MIN, site::FUJI_START_POS_MAX);

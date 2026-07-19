@@ -3,6 +3,7 @@
 // ブラウザ側ではコンソールで analyze(st) / aeroPack() / stepSim を同条件で呼べば比較できる。
 // 乱流(turb)とサーマルのノイズ項はランダムのため、turb=0・pjit=false・summer=false で決定的にする。
 #include "core/Aircraft.hpp"
+#include "core/Airframe.hpp"
 #include "core/Physics.hpp"
 #include "core/Weather.hpp"
 #include "core/SiteConst.hpp"
@@ -12,6 +13,7 @@
 #include <cmath>
 #include <cassert>
 #include <tuple>
+#include <limits>
 
 using namespace bm;
 
@@ -59,6 +61,42 @@ int main() {
     check(c.Vs > 5 && c.Vs < 8, "stall speed plausible");
     check(c.nFail > 1.0, "spar takes at least 1G");
     check(c.Pmin < a.Preq * 1.05, "Pmin <= cruise power");
+
+    // ---- Phase 0C-1: カスタム配置の質量・重心・慣性を飛行定数へ接続 ----
+    const MassBreakdown referenceMass = aggregateMass(buildDefaultLayout(st, a));
+    check(referenceMass.totalKg > 0 && referenceMass.I[0][0] > 0
+          && referenceMass.I[1][1] > 0 && referenceMass.I[2][2] > 0,
+          "default layout exposes finite mass properties");
+    const AircraftConstants sameMass = aeroPackCustomMass(st, a, prm, referenceMass, referenceMass);
+    check(near(sameMass.m, c.m, 1e-12) && near(sameMass.a.xCG, c.a.xCG, 1e-12),
+          "custom path with default mass preserves mass and CG");
+    check(near(sameMass.Ixx, c.Ixx, 1e-12) && near(sameMass.Iyy, c.Iyy, 1e-12)
+          && near(sameMass.Izz, c.Izz, 1e-12),
+          "custom path with default layout preserves legacy inertia");
+
+    MassBreakdown movedMass = referenceMass;
+    movedMass.totalKg += 8.0;
+    movedMass.cg.z += 0.25;
+    movedMass.I[0][0] += 11.0;  // 左右軸まわり -> pitch Iyy
+    movedMass.I[1][1] += 22.0;  // 上下軸まわり -> yaw Izz
+    movedMass.I[2][2] += 33.0;  // 前後軸まわり -> roll Ixx
+    const AircraftConstants moved = aeroPackCustomMass(st, a, prm, movedMass, referenceMass);
+    check(near(moved.m, movedMass.totalKg, 1e-12)
+          && near(moved.a.xCG, movedMass.cg.z, 1e-12),
+          "custom aggregate changes flight mass and longitudinal CG");
+    check(moved.a.SM < c.a.SM && moved.a.Vh < c.a.Vh && moved.Vs > c.Vs,
+          "aft/heavier custom layout changes stability and speed in expected direction");
+    check(near(moved.Ixx, c.Ixx + 33.0, 1e-12)
+          && near(moved.Iyy, c.Iyy + 11.0, 1e-12)
+          && near(moved.Izz, c.Izz + 22.0, 1e-12),
+          "airframe axes map to roll, pitch, and yaw inertia explicitly");
+
+    MassBreakdown invalidMass = movedMass;
+    invalidMass.totalKg = std::numeric_limits<double>::quiet_NaN();
+    const AircraftConstants fallback = aeroPackCustomMass(st, a, prm, invalidMass, referenceMass);
+    check(near(fallback.m, c.m, 1e-12) && near(fallback.a.xCG, c.a.xCG, 1e-12)
+          && near(fallback.Ixx, c.Ixx, 1e-12),
+          "invalid custom mass properties fall back to legacy constants");
 
     // ---- computePolar ----
     PolarResult pol = computePolar(st, a, prm);

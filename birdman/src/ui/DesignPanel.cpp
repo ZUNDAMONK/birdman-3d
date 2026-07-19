@@ -641,7 +641,7 @@ void DesignPanel::draw(sf::RenderTarget& rt, const sf::Font& font, float W, floa
                 componentButtons_[i].draw(rt, font, alphaMul);
         }
         y += 36;
-        drawText(rt, font, u8"このPhaseでは配置・表示のみ（飛行物理への反映は後続）",
+        drawText(rt, font, u8"配置・重量は質量／重心／慣性へ反映（空力・構造連成は後続）",
                  x0, y, 9, A(TEXT_DIM));
         y += 22;
     }
@@ -678,7 +678,7 @@ void DesignPanel::draw(sf::RenderTarget& rt, const sf::Font& font, float W, floa
         y += 34;
         if (mountCb_.estimateDesignMass) {
             char mass[80];
-            std::snprintf(mass, sizeof(mass), u8"固有設計の推定質量: %.2f kg（飛行物理は未接続）",
+            std::snprintf(mass, sizeof(mass), u8"固有設計の推定質量: %.2f kg（飛行時に反映）",
                           mountCb_.estimateDesignMass(part_, pendingDesign_));
             drawText(rt, font, mass, x0, y, 9, A(TEXT_DIM));
         }

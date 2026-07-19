@@ -1,5 +1,6 @@
 #include "core/Physics.hpp"
 #include "core/Aircraft.hpp"
+#include "core/Airframe.hpp"
 #include "core/Material.hpp"
 #include "core/Weather.hpp"
 #include "core/SiteConst.hpp"
@@ -207,6 +208,53 @@ AircraftConstants aeroPack(const AircraftParams& st, const Analysis& a, const Si
         c.tipStall = ac.tipStall;   // LLTの失速開始位置(翼端失速ロール崩れ用)
     }
     return c;
+}
+
+AircraftConstants aeroPackCustomMass(const AircraftParams& st, const Analysis& a,
+                                     const SimParams& prm,
+                                     const MassBreakdown& customMass,
+                                     const MassBreakdown& referenceMass) {
+    // 従来値を先に確保する。集約値が壊れていても飛行物理へ NaN/Inf を渡さない。
+    const AircraftConstants legacy = aeroPack(st, a, prm);
+    const auto finitePositive = [](double value) {
+        return std::isfinite(value) && value > 0.0;
+    };
+    const bool valid = finitePositive(customMass.totalKg)
+        && finitePositive(referenceMass.totalKg)
+        && std::isfinite(customMass.cg.z)
+        && std::isfinite(referenceMass.cg.z)
+        && finitePositive(customMass.I[0][0])
+        && finitePositive(customMass.I[1][1])
+        && finitePositive(customMass.I[2][2])
+        && finitePositive(referenceMass.I[0][0])
+        && finitePositive(referenceMass.I[1][1])
+        && finitePositive(referenceMass.I[2][2]);
+    if (!valid || !finitePositive(a.W) || !finitePositive(a.MAC)
+        || !finitePositive(a.S) || !finitePositive(st.span)) return legacy;
+
+    Analysis adjusted = a;
+    const double massRatio = customMass.totalKg / a.W;
+    adjusted.W = customMass.totalKg;
+    adjusted.xCG = customMass.cg.z;
+    adjusted.lh = adjusted.xHT - adjusted.xCG;
+    adjusted.Vh = adjusted.Sh * adjusted.lh / (adjusted.S * adjusted.MAC);
+    adjusted.Vv = adjusted.Sv * (adjusted.xVT - adjusted.xCG) / (adjusted.S * st.span);
+    const double tailEff = 0.9 * (st.elevRatio == 1.0 ? 1.0 : 0.85);
+    adjusted.xNP = adjusted.xAC + adjusted.MAC * adjusted.Vh * tailEff * 0.72;
+    adjusted.SM = (adjusted.xNP - adjusted.xCG) / adjusted.MAC * 100.0;
+    adjusted.V = a.V * std::sqrt(massRatio);
+
+    AircraftConstants result = aeroPack(st, adjusted, prm);
+    // Airframe: X=左右, Y=上下, Z=後方。
+    // 6DOF: Ixx=ロール(前後軸), Iyy=ピッチ(左右軸), Izz=ヨー(上下軸)。
+    // 質点グラフに未収録の翼・胴体分布慣性は legacy に残し、配置差分だけを加える。
+    const double rollDelta  = customMass.I[2][2] - referenceMass.I[2][2];
+    const double pitchDelta = customMass.I[0][0] - referenceMass.I[0][0];
+    const double yawDelta   = customMass.I[1][1] - referenceMass.I[1][1];
+    result.Ixx = std::max(legacy.Ixx * 0.05, legacy.Ixx + rollDelta);
+    result.Iyy = std::max(legacy.Iyy * 0.05, legacy.Iyy + pitchDelta);
+    result.Izz = std::max(legacy.Izz * 0.05, legacy.Izz + yawDelta);
+    return result;
 }
 
 AircraftConstants funPlaneConstants(const SimParams& prm) {
