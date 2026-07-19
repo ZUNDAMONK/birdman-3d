@@ -435,6 +435,28 @@ void defaultLayoutTests() {
         check(near(totalKg, an.W, 1e-9), "boomwing layout mass total: " + mode);
     }
 
+    // Phase 0B-4 connection presets: the stable tip hardpoints allow a single
+    // vertical-tail part to describe either twin-tail or wingtip-tail pairs.
+    st = {};
+    bm::AirframeGraph connected = bm::buildDefaultLayout(st, bm::analyze(st));
+    bm::Mount fin = connected.find("tail.v")->mount;
+    fin.parentId = "tail.h"; fin.hardpointId = "hp.tip"; fin.mirror = bm::MirrorMode::Pair;
+    check(connected.setMount("tail.v", fin), "twin-tail preset mount validates");
+    int finCount = 0;
+    for (const auto& item : connected.resolve()) if (item.part->id == "tail.v") {
+        ++finCount;
+        check(near(std::abs(point(item.world).x), st.hSpan * 0.5, 1e-12), "twin-tail uses htail tip");
+    }
+    check(finCount == 2, "twin-tail resolves two fins");
+    fin.parentId = "wing.main"; fin.hardpointId = "hp.tip";
+    check(connected.setMount("tail.v", fin), "wingtip-tail preset mount validates");
+    finCount = 0;
+    for (const auto& item : connected.resolve()) if (item.part->id == "tail.v") {
+        ++finCount;
+        check(near(std::abs(point(item.world).x), st.span * 0.5, 1e-12), "wingtip-tail uses wing tip");
+    }
+    check(finCount == 2, "wingtip-tail resolves two fins");
+
     bm::AircraftParams invalid;
     invalid.wingX = 1001.0;
     const bm::AirframeGraph rejected = bm::buildDefaultLayout(invalid, bm::analyze(invalid));

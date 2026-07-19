@@ -257,6 +257,15 @@ void DesignPanel::build(AircraftParams* st, std::function<void()> onChange,
         pendingMount_.mirror = pendingMount_.mirror == MirrorMode::Pair ? MirrorMode::None : MirrorMode::Pair;
         mountMessage_.clear();
     };
+    mountMirror_.charSize = 10;
+    mountConnection_.charSize = 10;
+    mountConnection_.onClick = [this] {
+        if (mountTargets_.empty()) return;
+        mountTargetIndex_ = (mountTargetIndex_ + 1) % mountTargets_.size();
+        pendingMount_.parentId = mountTargets_[mountTargetIndex_].parentId;
+        pendingMount_.hardpointId = mountTargets_[mountTargetIndex_].hardpointId;
+        mountMessage_.clear();
+    };
     mountApply_.label = u8"適用"; mountApply_.style = 1;
     mountApply_.onClick = [this] {
         std::string error;
@@ -278,12 +287,47 @@ void DesignPanel::build(AircraftParams* st, std::function<void()> onChange,
     mountUndo_.onClick = [this] { if (mountCb_.undo && mountCb_.undo()) loadMountEditor(); };
     mountRedo_.label = u8"やり直す";
     mountRedo_.onClick = [this] { if (mountCb_.redo && mountCb_.redo()) loadMountEditor(); };
+    const char* presetLabels[3] = {u8"中央尾翼", u8"双尾翼", u8"翼端尾翼"};
+    for (int i = 0; i < 3; ++i) {
+        vtailPresets_[(std::size_t)i].label = presetLabels[i];
+        vtailPresets_[(std::size_t)i].charSize = 11;
+        vtailPresets_[(std::size_t)i].onClick = [this, i] {
+            std::string error;
+            if (mountCb_.applyVTailPreset && mountCb_.applyVTailPreset(i, error)) {
+                loadMountEditor(); mountMessage_ = u8"尾翼配置を変更しました";
+            } else if (!error.empty()) mountMessage_ = u8"変更できません: " + error;
+        };
+    }
+    for (std::size_t i = 0; i < componentButtons_.size(); ++i) {
+        componentButtons_[i].charSize = 10;
+        componentButtons_[i].onClick = [this, i] {
+            const auto keys = componentKeys();
+            if (i >= keys.size()) return;
+            std::string error;
+            if (mountCb_.toggleComponent && mountCb_.toggleComponent(keys[i], error))
+                mountMessage_ = u8"部品構成を変更しました";
+            else if (!error.empty()) mountMessage_ = u8"変更できません: " + error;
+        };
+    }
+}
+
+std::vector<std::string> DesignPanel::componentKeys() const {
+    if (part_ == BodyPart::Cockpit) return {"pilot", "fairing", "gear"};
+    if (part_ == BodyPart::TailBeam) return {"boomwing"};
+    return {};
 }
 
 void DesignPanel::loadMountEditor() {
     Mount value;
     mountEditable_ = mountCb_.get && mountCb_.get(part_, value);
-    if (mountEditable_) pendingMount_ = std::move(value);
+    if (mountEditable_) {
+        pendingMount_ = std::move(value);
+        mountTargets_ = mountCb_.targets ? mountCb_.targets(part_) : std::vector<MountTarget>{};
+        mountTargetIndex_ = 0;
+        for (std::size_t i = 0; i < mountTargets_.size(); ++i)
+            if (mountTargets_[i].parentId == pendingMount_.parentId
+                && mountTargets_[i].hardpointId == pendingMount_.hardpointId) { mountTargetIndex_ = i; break; }
+    } else mountTargets_.clear();
 }
 
 // 部位→関連セクション(sections_のindex)。build()内のsec()呼び出し順と対応:
@@ -330,6 +374,12 @@ void DesignPanel::relayout() {
         y += 26;
         for (auto& slider : mountSliders_) { slider.rect = {x0, y, w, 34}; y += 38; }
         mountMirror_.rect = {x0, y, w, 28}; y += 34;
+        mountConnection_.rect = {x0, y, w, 28}; y += 34;
+        if (part_ == BodyPart::VTail) {
+            const float pw = (w - 8) / 3;
+            for (int i = 0; i < 3; ++i) vtailPresets_[(std::size_t)i].rect = {x0 + i * (pw + 4), y, pw, 28};
+            y += 34;
+        }
         const float bw = (w - 8) / 3;
         mountApply_.rect = {x0, y, bw, 28};
         mountCancel_.rect = {x0 + bw + 4, y, bw, 28};
@@ -340,6 +390,14 @@ void DesignPanel::relayout() {
         y += 10;
     } else {
         y += 48;
+    }
+    const auto components = componentKeys();
+    if (!components.empty()) {
+        y += 26;
+        const float cw = (w - 8) / 3;
+        for (std::size_t i = 0; i < components.size(); ++i)
+            componentButtons_[i].rect = {x0 + (float)i * (cw + 4), y, cw, 30};
+        y += 58;
     }
     for (int si : activeSections_) {
         if (si < 0 || si >= (int)sections_.size()) continue;
@@ -385,12 +443,16 @@ bool DesignPanel::handleEvent(const sf::Event& ev, sf::Vector2f m, float W, floa
     if (mountEditable_) {
         for (auto& slider : mountSliders_) consumed |= slider.handle(ev, m);
         consumed |= mountMirror_.handle(ev, m);
+        consumed |= mountConnection_.handle(ev, m);
+        if (part_ == BodyPart::VTail) for (auto& button : vtailPresets_) consumed |= button.handle(ev, m);
         consumed |= mountApply_.handle(ev, m);
         consumed |= mountCancel_.handle(ev, m);
         consumed |= mountReset_.handle(ev, m);
         consumed |= mountUndo_.handle(ev, m);
         consumed |= mountRedo_.handle(ev, m);
     }
+    const auto components = componentKeys();
+    for (std::size_t i = 0; i < components.size(); ++i) consumed |= componentButtons_[i].handle(ev, m);
     for (int si : activeSections_) {
         if (si < 0 || si >= (int)sections_.size()) continue;
         auto& sec = sections_[si];
@@ -439,13 +501,20 @@ void DesignPanel::draw(sf::RenderTarget& rt, const sf::Font& font, float W, floa
         }
         y += 26;
         for (auto& slider : mountSliders_) { if (slider.rect.top + 34 > top + headerH && slider.rect.top < top + panelH) slider.draw(rt, font, alphaMul); y += 38; }
-        mountMirror_.label = pendingMount_.mirror == MirrorMode::Pair ? u8"左右ミラー: ON" : u8"左右ミラー: OFF";
+        mountMirror_.label = pendingMount_.mirror == MirrorMode::Pair
+            ? u8"左右ミラー: ON（＋X側を基準に反対側を生成）" : u8"左右ミラー: OFF";
         mountMirror_.style = pendingMount_.mirror == MirrorMode::Pair ? 2 : 0;
+        mountConnection_.label = mountTargets_.empty() ? u8"接続先なし"
+            : u8"接続先: " + mountTargets_[mountTargetIndex_].label + u8"（クリックで変更）";
         mountUndo_.enabled = mountCb_.canUndo && mountCb_.canUndo();
         mountRedo_.enabled = mountCb_.canRedo && mountCb_.canRedo();
-        for (Button* button : {&mountMirror_, &mountApply_, &mountCancel_, &mountReset_, &mountUndo_, &mountRedo_})
+        for (Button* button : {&mountMirror_, &mountConnection_, &mountApply_, &mountCancel_, &mountReset_, &mountUndo_, &mountRedo_})
             if (button->rect.top + button->rect.height > top + headerH && button->rect.top < top + panelH) button->draw(rt, font, alphaMul);
-        y += 100;
+        y += 134;
+        if (part_ == BodyPart::VTail) {
+            for (auto& button : vtailPresets_) button.draw(rt, font, alphaMul);
+            y += 34;
+        }
         if (!mountMessage_.empty()) {
             const bool bad = mountMessage_.find(u8"ません") != std::string::npos;
             drawText(rt, font, mountMessage_, x0, y, 10, A(bad ? BAD : TEXT_DIM));
@@ -456,6 +525,27 @@ void DesignPanel::draw(sf::RenderTarget& rt, const sf::Font& font, float W, floa
         if (y + 36 > top + headerH && y < top + panelH)
             drawText(rt, font, u8"この基準部品の取付位置は編集できません", x0, y + 14, 11, A(TEXT_DIM));
         y += 48;
+    }
+    const auto components = componentKeys();
+    if (!components.empty()) {
+        if (y + 20 > top + headerH && y < top + panelH) {
+            drawPanelRect(rt, {x0 - 4, y, w + 8, 22}, A(BLUE_DIM), sf::Color::Transparent, 0);
+            drawText(rt, font, u8"部品構成", x0 + 4, y + 3, 13, A(sf::Color::White), 0, true);
+        }
+        y += 26;
+        static const std::map<std::string, std::string> names = {
+            {"pilot", u8"パイロット"}, {"fairing", u8"フェアリング"},
+            {"gear", u8"着陸装置"}, {"boomwing", u8"ビーム翼"}};
+        for (std::size_t i = 0; i < components.size(); ++i) {
+            const bool present = mountCb_.hasComponent && mountCb_.hasComponent(components[i]);
+            componentButtons_[i].label = names.at(components[i]) + (present ? ": ON" : ": OFF");
+            componentButtons_[i].style = present ? 2 : 0;
+            componentButtons_[i].draw(rt, font, alphaMul);
+        }
+        y += 36;
+        drawText(rt, font, u8"このPhaseでは配置・表示のみ（飛行物理への反映は後続）",
+                 x0, y, 9, A(TEXT_DIM));
+        y += 22;
     }
     for (int si : activeSections_) {
         if (si < 0 || si >= (int)sections_.size()) continue;
