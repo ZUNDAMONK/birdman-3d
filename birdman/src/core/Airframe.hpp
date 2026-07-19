@@ -10,6 +10,9 @@
 
 namespace bm {
 
+struct AircraftParams;
+struct Analysis;
+
 struct Transform3 {
     glm::dvec3 pos{0.0};
     glm::dvec3 rotDeg{0.0};
@@ -61,7 +64,8 @@ struct Part {
     PartKind kind = PartKind::Unknown;
     Mount mount;
     std::vector<Hardpoint> hardpoints;
-    MassNode mass;
+    // 1部品が構造・駆動・艤装など複数の解析質量項目を担える。
+    std::vector<MassNode> massNodes;
 };
 
 glm::dmat4 transformMatrix(const Transform3& transform);
@@ -102,5 +106,8 @@ private:
     std::string rootId_;
     std::vector<ValidationError> ingestErrors_;
 };
+
+// 既存パラメータを真実の源として、決定的な標準機Layoutを生成する。
+AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an);
 
 } // namespace bm

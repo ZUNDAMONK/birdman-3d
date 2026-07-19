@@ -262,6 +262,7 @@ int Game::run() {
 
 void Game::rebuildAircraft() {
     an_ = analyze(st_, &prm_);
+    graph_ = buildDefaultLayout(st_, an_);
     r3d_.buildAircraft(st_, an_);
 }
 
@@ -827,21 +828,28 @@ void Game::setFPV(bool on) {
     else if (!on) acVisible_ = true;
 }
 
-// ---- 部位クリックのアンカー座標 (Renderer3D::buildAircraft のジオメトリ式と一致させる) ----
+// ---- 部位クリックのアンカー座標（配置はAirframeGraphを唯一の参照元とする） ----
 std::array<glm::dvec3, (size_t)BodyPart::Count> Game::bodyAnchors() const {
     std::array<glm::dvec3, (size_t)BodyPart::Count> a{};
-    const double hWing = st_.posture == "upright" ? 2.4 : 2.0;
-    const double hBoom = hWing - 0.15;
-    const double dihT = std::tan((st_.jig == "flat" ? 0 : st_.dihedral) * PI / 180);
-    const double half = st_.span / 2;
-    const double propH = st_.propConfig == "pylon" ? hBoom + 0.9 : hBoom;
-    a[(size_t)BodyPart::Wing]     = {0, hWing, an_.wingLE + an_.MAC * 0.5};
-    a[(size_t)BodyPart::Prop]     = {0, propH, an_.xProp};
-    a[(size_t)BodyPart::Cockpit]  = {0, 1.0, st_.seatX};
-    a[(size_t)BodyPart::HTail]    = {0, hBoom, an_.xHT};
-    a[(size_t)BodyPart::VTail]    = {0, hBoom + st_.vHeight * 0.5, an_.xVT};
-    a[(size_t)BodyPart::TailBeam] = {0, hBoom, (st_.seatX + 0.55 + an_.fusLen) * 0.5};
-    (void)dihT; (void)half;
+    const auto placed = graph_.resolve();
+    auto origin = [&](const char* id) {
+        for (const auto& item : placed)
+            if (!item.mirrored && item.part->id == id) return glm::dvec3(item.world[3]);
+        return glm::dvec3(0.0);
+    };
+    a[(size_t)BodyPart::Wing] = origin("wing.main") + glm::dvec3(0.0, 0.0, an_.MAC * 0.5);
+    a[(size_t)BodyPart::Prop] = origin("prop.main");
+    a[(size_t)BodyPart::Cockpit] = origin("cockpit") + glm::dvec3(0.0, 1.0, 0.0);
+    a[(size_t)BodyPart::HTail] = origin("tail.h") + glm::dvec3(0.0, -0.02, 0.0);
+    a[(size_t)BodyPart::VTail] = origin("tail.v") + glm::dvec3(0.0, st_.vHeight * 0.5, 0.0);
+    if (const Part* root = graph_.find("fuselage")) {
+        for (const auto& hp : root->hardpoints) {
+            if (hp.id == "hp.ui.tailbeam") {
+                a[(size_t)BodyPart::TailBeam] = glm::dvec3(transformMatrix(hp.t)[3]);
+                break;
+            }
+        }
+    }
     return a;
 }
 

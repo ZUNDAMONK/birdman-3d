@@ -1,4 +1,5 @@
 #include "core/Airframe.hpp"
+#include "core/Aircraft.hpp"
 #include "core/MiniJson.hpp"
 
 #include <glm/glm.hpp>
@@ -208,6 +209,92 @@ void mutationTests() {
     check(!graph.removeSubtree("body") && graph.size() == 1, "reject root removal");
 }
 
+const bm::AirframeGraph::Placed* normalPlacement(
+    const std::vector<bm::AirframeGraph::Placed>& placed, const std::string& id) {
+    for (const auto& item : placed)
+        if (!item.mirrored && item.part->id == id) return &item;
+    return nullptr;
+}
+
+void defaultLayoutTests() {
+    const std::vector<std::string> postures{"upright", "semi", "recumbent"};
+    const std::vector<std::string> props{"tractor", "pylon", "midboom", "pusher"};
+    const std::vector<std::string> gears{"none", "tandem", "tri", "mono"};
+    for (const auto& posture : postures) for (const auto& propConfig : props) for (const auto& gear : gears) {
+        bm::AircraftParams st;
+        st.posture = posture;
+        st.propConfig = propConfig;
+        st.gear = gear;
+        st.fairing = gear == "tri";
+        const bm::Analysis an = bm::analyze(st);
+        const bm::AirframeGraph graph = bm::buildDefaultLayout(st, an);
+        const auto errors = graph.validate();
+        const auto placed = graph.resolve();
+        const std::string variant = posture + "/" + propConfig + "/" + gear;
+        check(errors.empty(), "default layout validates: " + variant);
+
+        const auto* wing = normalPlacement(placed, "wing.main");
+        const auto* htail = normalPlacement(placed, "tail.h");
+        const auto* vtail = normalPlacement(placed, "tail.v");
+        const auto* prop = normalPlacement(placed, "prop.main");
+        const auto* cockpit = normalPlacement(placed, "cockpit");
+        const double hWing = posture == "upright" ? 2.4 : 2.0;
+        const double hBoom = hWing - 0.15;
+        const double propH = propConfig == "pylon" ? hBoom + 0.9 : hBoom;
+        check(wing && near(point(wing->world), {0.0, hWing, st.wingX}, 1e-12), "default wing origin: " + variant);
+        check(htail && near(point(htail->world), {0.0, hBoom + 0.02, an.xHT}, 1e-12), "default htail origin: " + variant);
+        check(vtail && near(point(vtail->world), {0.0, hBoom, an.xVT}, 1e-12), "default vtail origin: " + variant);
+        check(prop && near(point(prop->world), {0.0, propH, an.xProp}, 1e-12), "default prop origin: " + variant);
+        check(cockpit && near(point(cockpit->world), {0.0, 0.0, st.seatX}, 1e-12), "default cockpit origin: " + variant);
+
+        // bodyAnchorsの部品別表示オフセットを含め、旧式の座標と一致する。
+        check(wing && near(point(wing->world) + glm::dvec3(0.0, 0.0, an.MAC * 0.5),
+                           {0.0, hWing, an.wingLE + an.MAC * 0.5}, 1e-12), "wing UI golden: " + variant);
+        check(htail && near(point(htail->world) + glm::dvec3(0.0, -0.02, 0.0),
+                            {0.0, hBoom, an.xHT}, 1e-12), "htail UI golden: " + variant);
+        check(vtail && near(point(vtail->world) + glm::dvec3(0.0, st.vHeight * 0.5, 0.0),
+                            {0.0, hBoom + st.vHeight * 0.5, an.xVT}, 1e-12), "vtail UI golden: " + variant);
+        check(cockpit && near(point(cockpit->world) + glm::dvec3(0.0, 1.0, 0.0),
+                              {0.0, 1.0, st.seatX}, 1e-12), "cockpit UI golden: " + variant);
+        const bm::Part* root = graph.find("fuselage");
+        const bm::Hardpoint* tailBeamAnchor = nullptr;
+        for (const auto& hp : root->hardpoints) if (hp.id == "hp.ui.tailbeam") tailBeamAnchor = &hp;
+        check(tailBeamAnchor && near(tailBeamAnchor->t.pos,
+            {0.0, hBoom, (st.seatX + 0.55 + an.fusLen) * 0.5}, 1e-12), "tail beam UI golden: " + variant);
+
+        int analysisUse[11]{};
+        double totalKg = 0.0, zMoment = 0.0;
+        for (const auto& entry : graph.parts()) {
+            const auto* placement = normalPlacement(placed, entry.first);
+            for (const auto& mass : entry.second.massNodes) {
+                if (mass.analysisItem >= 0 && mass.analysisItem < 11) ++analysisUse[mass.analysisItem];
+                const glm::dvec3 cg = point(placement->world, mass.cgLocal);
+                totalKg += mass.kg;
+                zMoment += mass.kg * cg.z;
+            }
+        }
+        for (int item = 0; item < 11; ++item)
+            check(analysisUse[item] == 1, "analysis mass item used once " + std::to_string(item) + ": " + variant);
+        check(near(totalKg, an.W, 1e-9), "layout mass total golden: " + variant);
+        check(near(zMoment / totalKg, an.xCG, 1e-9), "layout mass cg golden: " + variant);
+    }
+
+    bm::AircraftParams st;
+    st.gear = "none";
+    for (const auto& mode : {std::string("L"), std::string("R"), std::string("LR")}) {
+        st.boomWing = mode;
+        const bm::Analysis an = bm::analyze(st);
+        const bm::AirframeGraph graph = bm::buildDefaultLayout(st, an);
+        int count = 0;
+        for (const auto& item : graph.resolve()) if (item.part->id == "boomwing") ++count;
+        check(count == (mode == "LR" ? 2 : 1), "boomwing instance count: " + mode);
+        double totalKg = 0.0;
+        for (const auto& entry : graph.parts())
+            for (const auto& mass : entry.second.massNodes) totalKg += mass.kg;
+        check(near(totalKg, an.W, 1e-9), "boomwing layout mass total: " + mode);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -216,6 +303,7 @@ int main() {
     graphResolveTests();
     validationTests();
     mutationTests();
+    defaultLayoutTests();
     if (failures == 0) std::cout << "airframe_test: all checks passed\n";
     return failures == 0 ? 0 : 1;
 }
