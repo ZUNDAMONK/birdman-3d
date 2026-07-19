@@ -617,32 +617,7 @@ void Renderer3D::resize(int w, int h) { vpW_ = std::max(1, w); vpH_ = std::max(1
 void Renderer3D::buildEnvironment() {
     std::mt19937 rng(42);
     std::uniform_real_distribution<double> rnd(0, 1);
-    // ---- 画像素材(第7弾): ディスプレイリスト焼き込み前にGLテクスチャ化しておく ----
-    // (glTexImage2Dはリストへコンパイルされ得るため、必ずglNewListの外で行う)
     if (!biwaWaterTex_) biwaWaterTex_ = loadTileTexture("biwako_water_tile");
-    const SpriteTex* spReed[4] = {&loadSprite("biwako_reed_01"), &loadSprite("biwako_reed_02"),
-                                  &loadSprite("biwako_reed_03"), &loadSprite("biwako_reed_04")};
-    const SpriteTex* spGrass[2] = {&loadSprite("biwako_shore_grass_01"),
-                                   &loadSprite("biwako_shore_grass_02")};
-    const SpriteTex* spWillow[2] = {&loadSprite("biwako_willow_01"), &loadSprite("biwako_willow_02")};
-    const SpriteTex& spPine = loadSprite("biwako_pine_cluster");
-    const SpriteTex& spLily = loadSprite("biwako_water_lilies");
-    const SpriteTex& spDrift = loadSprite("biwako_driftwood");
-    const SpriteTex& spStones = loadSprite("biwako_shoreline_stones");
-    const SpriteTex& spBuoyRW = loadSprite("biwako_red_white_buoy");
-    const SpriteTex& spBuoyY = loadSprite("biwako_yellow_buoy");
-    const SpriteTex& spBoat = loadSprite("biwako_safety_boat");
-    // 左端に別オブジェクトの断片が混入している素材は左を切り捨ててから使う(目視確認結果)
-    const SpriteTex& spPylonS = loadSprite("biwako_course_pylon", 0.45);
-    const SpriteTex& spLifebox = loadSprite("biwako_lifejacket_box", 0.30);
-    const SpriteTex& spRing = loadSprite("biwako_rescue_ring", 0.45);
-    const SpriteTex& spWindsock = loadSprite("biwako_windsock", 0.40);
-    const SpriteTex& spLaunchPf = loadSprite("biwako_launch_platform");
-    const SpriteTex& spDock = loadSprite("biwako_floating_dock");
-    const SpriteTex& spObsPole = loadSprite("biwako_observation_pole");
-    const SpriteTex& spMarkerLn = loadSprite("biwako_boundary_marker_line");
-    const SpriteTex& spBarrier = loadSprite("biwako_warning_barrier");
-    std::vector<glm::dvec3> pineSpots;   // 東岸の丘の麓(山ループ内で位置だけ収集し後でスプライト描画)
     envList_ = glGenLists(1);
     glNewList(envList_, GL_COMPILE);
 
@@ -759,31 +734,21 @@ void Renderer3D::buildEnvironment() {
         setColor(col); drawFlatRing({x, 0.5, z}, 58.5, 61.5, 40);
         glEnable(GL_LIGHTING);
     };
-    // 第7弾: 近距離帯(d<2000)はスプライトブイ(red_white/yellow)に置換、遠方は従来3D。
-    // spritePass=trueの呼び出しはスプライト用GLステート中に行う(二重配置しないよう帯域で分担)
-    auto buoyLine = [&](double px, double pz, bool spritePass) {
+    auto buoyLine = [&](double px, double pz) {
         double len = std::hypot(px, pz), ux = px / len, uz = pz / len, qx = -uz, qz = ux;
         for (double d = 100; d < len - 150; d += (d < 2000 ? 100 : 500)) {
             bool km = std::fmod(std::round(d), 1000.0) == 0, big = std::fmod(std::round(d), 500.0) == 0;
             double r = km ? 1.6 : big ? 1.0 : 0.5;
             unsigned col = km ? 0xd9342b : 0xe8a23b;
-            const bool nearBand = d < 2000;
-            if (spritePass != nearBand) continue;
             for (int s : {1, -1}) {
                 double bx = ux * d + qx * 14 * s, bz = uz * d + qz * 14 * s;
                 if (!insideLake(-bz, bx)) continue;   // 岸線後退で陸に載るブイはスキップ
-                if (spritePass) {
-                    // km毎=紅白ブイ(大)、それ以外=黄ブイ(小)。水面(y=-0.35)に接地
-                    if (km) spriteCross(spBuoyRW, {bx, -0.35, bz}, 2.0);
-                    else spriteCross(spBuoyY, {bx, -0.35, bz}, big ? 1.3 : 0.9);
-                } else {
-                    setColor(col); drawSphere({bx, r * 0.5, bz}, r, 8, 6);
-                    setColor(0xffffff); drawStrut({bx, r * 0.2, bz}, {bx, r * 2.4, bz}, 0.05, 0.05, 5);
-                }
+                setColor(col); drawSphere({bx, r * 0.5, bz}, r, 8, 6);
+                setColor(0xffffff); drawStrut({bx, r * 0.2, bz}, {bx, r * 2.4, bz}, 0.05, 0.05, 5);
             }
         }
     };
-    buoyLine(NP[0], NP[1], false); buoyLine(SP[0], SP[1], false);
+    buoyLine(NP[0], NP[1]); buoyLine(SP[0], SP[1]);
     pylon(NP[0], NP[1], 0xd9342b);
     pylon(SP[0], SP[1], 0x2c6fd9);
 
@@ -822,164 +787,12 @@ void Renderer3D::buildEnvironment() {
                 if (std::abs(p.x) < w + 200 && p.z > -w && p.z < 2100 + w) continue;
                 drawMountainRidge(rng, {p.x, -4, p.z}, w, h,
                                   isEast ? colsEast[(i + j) % 3] : colsWest[(i + j) % 3]);
-                // 東岸の低い丘の麓の針葉樹: 第7弾でpine_clusterスプライトに置換
-                // (スプライトはリスト末尾のスプライトパスで描くため、ここでは位置だけ収集)
-                if (isEast && std::hypot(p.x, p.z) < 3200) {
-                    const int nT = 2 + (int)(rnd(rng) * 2);
-                    for (int tt = 0; tt < nT; tt++) {
-                        const double ta = rnd(rng) * 2 * PI, td = w * (0.9 + rnd(rng) * 0.5);
-                        pineSpots.push_back({p.x + std::cos(ta) * td, 0.02, p.z + std::sin(ta) * td});
-                    }
-                }
             }
         }
         // 竹生島(北湖の小島)
         setColor(0x6f8a6a);
         drawCone(-6000, -2, -16000, 220, 70, 7);
-        setColor(0xffffff);
-        drawStrut({-6000, 60, -16000}, {-6000, 84, -16000}, 3, 3, 6);
     }
-    // サポートボート
-    auto boat = [&](double px, double pz, unsigned col) {
-        setColor(col); drawBox(px, 0.25, pz, 1.6, 0.5, 4.5);
-        setColor(0xeeeeee); drawBox(px, 0.7, pz - 0.5, 1.2, 0.6, 1.6);
-    };
-    boat(22, -10, 0xcc4433); boat(-20, -16, 0x3366aa); boat(30, -60, 0xddaa33);
-    boat(-26, -120, 0x44aa77); boat(40, -260, 0xcc4433);
-    // ヨット(白い三角帆): 船体+マスト+帆
-    auto yacht = [&](double px, double pz, double s, unsigned hullCol, double sailDir) {
-        setColor(hullCol); drawBox(px, 0.30 * s, pz, 1.4 * s, 0.55 * s, 3.8 * s);
-        setColor(0xdddddd); drawStrut({px, 0.5 * s, pz - 0.3 * s}, {px, 4.4 * s, pz - 0.3 * s}, 0.05 * s, 0.03 * s, 5);
-        setColor(0xffffff);
-        glBegin(GL_TRIANGLES);
-        const glm::dvec3 a(px, 4.1 * s, pz - 0.3 * s), b(px, 1.0 * s, pz - 0.3 * s),
-                         c(px + 2.0 * s * sailDir, 1.0 * s, pz + 0.9 * s);
-        faceNormal(a, b, c);
-        glVertex3d(a.x, a.y, a.z); glVertex3d(b.x, b.y, b.z); glVertex3d(c.x, c.y, c.z);
-        glEnd();
-    };
-    // コース序盤〜中盤(x=500〜6000)に安全管理艇・プレジャーボート・ヨットを散らす
-    // (飛行コース直上|yl|<60mは避ける。ブイ列は±14mなので干渉しない)
-    {
-        const unsigned pcols[4] = {0xcc4433, 0x3366aa, 0x44aa77, 0xddaa33};
-        for (int i = 0; i < 10; i++) {
-            const double cz = -(500 + rnd(rng) * 5500);                       // コースx=500..6000
-            const double cx = (70 + rnd(rng) * 620) * (rnd(rng) < 0.5 ? -1 : 1);
-            if (i % 2 == 0) yacht(cx, cz, 0.9 + rnd(rng) * 0.7, 0xf4f4f4, rnd(rng) < 0.5 ? -1 : 1);
-            else boat(cx, cz, pcols[i % 4]);
-        }
-    }
-    // 北湖方面の遠景シルエット(貨物船/観光船)
-    auto bigShip = [&](double px, double pz, double len) {
-        setColor(0x8a97a5); drawBox(px, 2.8, pz, 9, 5.6, len);
-        setColor(0xaab6c2); drawBox(px, 7.6, pz + len * 0.18, 6.5, 4.2, len * 0.28);
-    };
-    bigShip(-2600, -15500, 62);
-    bigShip(1400, -17500, 85);
-    // 観覧テント(岸線後退に合わせ陸側z>=55へ移動)
-    const unsigned tcolL[3] = {0xffffff, 0x4488cc, 0xcc5544}, tcolR[3] = {0xffffff, 0x44aa66, 0xddaa44};
-    for (int i = 0; i < 8; i++) {
-        setColor(tcolL[i % 3]); drawCone(-18 - rnd(rng) * 30, 1.5, 58 + i * 14, 2.2, 1.4, 4);
-        setColor(tcolR[i % 3]); drawCone(18 + rnd(rng) * 30, 1.5, 58 + i * 14, 2.2, 1.4, 4);
-    }
-
-    // ---- 会場周辺の植生(第5弾→第7弾でスプライト化) ----
-    // プロシージャル雑草は数を半減(52→26)しスプライト草と併用。
-    // ヨシ原(drawReedBed)・並木(drawTreeBroadleaf)はスプライトへ置換済み(下のスプライトパス)
-    auto venueClear = [](double x, double z) {
-        if (std::abs(x) < 8) return false;                        // 桟橋~観客動線
-        if (std::abs(x) > 12 && std::abs(x) < 55 && z < 190) return false;   // テント帯
-        return true;
-    };
-    {
-        int placed = 0;
-        while (placed < 26) {
-            const double x = -120 + rnd(rng) * 240;
-            const double z = 60 + rnd(rng) * 620;
-            if (!venueClear(x, z)) continue;
-            drawGrassTuft(rng, {x, 0.04, z}, 0.5 + rnd(rng) * 0.5);
-            placed++;
-        }
-        for (int i = 0; i < 7; i++) {
-            double x, z;
-            do { x = -115 + rnd(rng) * 230; z = 80 + rnd(rng) * 550; } while (!venueClear(x, z));
-            drawBush(rng, {x, 0.04, z}, 1.2 + rnd(rng) * 1.0);
-        }
-    }
-
-    // ==== 画像スプライト配置(第7弾) ====
-    // カットアウト描画(非ライティング+アルファテスト)。envList_に静的焼き込み
-    spriteStateOn();
-    {
-        // ヨシ原: 水際の群落12箇所×3〜6枚(高さ1.5〜2.2m)。
-        // コースライン|ワールドx|<100とブイ列(±14)を避ける(第5弾のプロシージャル群落を置換)
-        auto reedCluster = [&](double cx, double cz) {
-            const int n = 3 + (int)(rnd(rng) * 3.99);
-            for (int k = 0; k < n; k++) {
-                const double a = rnd(rng) * 2 * PI, dd = std::sqrt(rnd(rng)) * 6.0;
-                spriteCross(*spReed[(int)(rnd(rng) * 3.99)],
-                            {cx + std::cos(a) * dd, -0.30, cz + std::sin(a) * dd},
-                            1.5 + rnd(rng) * 0.7);
-            }
-        };
-        for (int i = 0; i < 8; i++) reedCluster(115 + rnd(rng) * 720, 46 + (rnd(rng) - 0.5) * 5);
-        for (int i = 0; i < 4; i++) {
-            const double t = 0.08 + rnd(rng) * 0.4;
-            reedCluster(900 + 1700 * t + (rnd(rng) - 0.5) * 30, 50 - 2050 * t + (rnd(rng) - 0.5) * 30);
-        }
-        // 会場草地の草スプライト40枚(高さ0.4〜0.7m。プロシージャル雑草26株と併用)
-        int placed = 0;
-        while (placed < 40) {
-            const double x = -120 + rnd(rng) * 240, z = 58 + rnd(rng) * 620;
-            if (!venueClear(x, z)) continue;
-            spriteCross(*spGrass[placed % 2], {x, 0.04, z}, 0.4 + rnd(rng) * 0.3);
-            placed++;
-        }
-        // 湖岸の柳並木(第5弾の広葉樹並木を置換): 草地外縁x=±100に12本、高さ5〜7m
-        for (int i = 0; i < 6; i++) {
-            const double z = 170 + i * 300;
-            spriteCross(*spWillow[i % 2], {-100 + (rnd(rng) - 0.5) * 10, 0.03, z + (rnd(rng) - 0.5) * 60},
-                        5.0 + rnd(rng) * 2.0);
-            spriteCross(*spWillow[(i + 1) % 2], {100 + (rnd(rng) - 0.5) * 10, 0.03, z + 150 + (rnd(rng) - 0.5) * 60},
-                        5.0 + rnd(rng) * 2.0);
-        }
-        // 松の群生(pine_cluster): 東岸の丘の麓(山ループで収集した位置)、高さ6〜9m
-        for (const auto& p : pineSpots)
-            spriteCross(spPine, p, 6.0 + rnd(rng) * 3.0);
-        // スイレン: 岸近くの浅水面に平置き(水面-0.35の+0.02上)6箇所
-        for (int i = 0; i < 6; i++)
-            spriteFlat(spLily, {130 + rnd(rng) * 500, -0.33, 30 + rnd(rng) * 14}, 2.5 + rnd(rng) * 1.5);
-        // 流木・汀線の石: 波打ち際(z≈50)に点在
-        for (int i = 0; i < 4; i++)
-            spriteQuad(spDrift, {-200 + rnd(rng) * 900, 0.04, 49 + rnd(rng) * 4}, 0.5 + rnd(rng) * 0.3,
-                       rnd(rng) * 180);
-        for (int i = 0; i < 4; i++)
-            spriteQuad(spStones, {-150 + rnd(rng) * 800, 0.04, 50 + rnd(rng) * 4}, 0.5 + rnd(rng) * 0.3,
-                       rnd(rng) * 180);
-        // 近距離帯(d<2000)のブイをスプライトに置換(遠方は上の3D球のまま)
-        buoyLine(NP[0], NP[1], true); buoyLine(SP[0], SP[1], true);
-        // 安全艇: コース脇の湖上に5枚(コース直上|x|<60は避ける)
-        for (int i = 0; i < 5; i++) {
-            const double bx = (60 + rnd(rng) * 80) * (i % 2 ? -1 : 1);
-            spriteQuad(spBoat, {bx, -0.35, -(150 + i * 260 + rnd(rng) * 120)}, 1.7, rnd(rng) * 180);
-        }
-        // 小型コースマーカー(course_pylon): 桟橋沖に3枚
-        for (int i = 0; i < 3; i++)
-            spriteCross(spPylonS, {(i - 1) * 28.0, -0.35, -35.0 - i * 18}, 1.2);
-        // 桟橋周辺の補助構造物: 発進補助台・浮き桟橋(岸寄りの水面)
-        spriteQuad(spLaunchPf, {9, -0.35, 42}, 1.6, 90);
-        spriteQuad(spDock, {-9, -0.35, 38}, 0.9, 0);
-        // 会場の運営設備(岸側): 観測ポール・境界ロープ・注意バリア・救命具箱・救命輪・吹き流し
-        spriteQuad(spObsPole, {6, 0.04, 55}, 2.2, 45);
-        spriteQuad(spMarkerLn, {-12, 0.04, 52}, 0.45, 10);
-        spriteQuad(spMarkerLn, {14, 0.04, 53}, 0.45, -15);
-        spriteQuad(spBarrier, {-11, 0.04, 57}, 1.0, 5);
-        spriteQuad(spBarrier, {11, 0.04, 58}, 1.0, -8);
-        spriteQuad(spLifebox, {9, 0.04, 60}, 0.8, 30);
-        spriteQuad(spRing, {12, 0.04, 62}, 1.2, 60);
-        spriteCross(spWindsock, {5, 0.04, 53}, 6.0);   // 桟橋付け根付近、高さ~6m
-    }
-    spriteStateOff();
     // 雲(扁平球・2層: 低層=大きく濃い/高層=小さく淡い)
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1008,30 +821,8 @@ void Renderer3D::setSite(const std::string& site) {
 void Renderer3D::buildEnvFujikawa() {
     std::mt19937 rng(7);
     std::uniform_real_distribution<double> rnd(0, 1);
-    // ---- 画像素材(第7弾): リスト焼き込み前にGLテクスチャ化 ----
     if (!asphaltTex_) asphaltTex_ = loadTileTexture("fujikawa_runway_asphalt_tile");
     if (!biwaWaterTex_) biwaWaterTex_ = loadTileTexture("biwako_water_tile");
-    const SpriteTex* spCone[2] = {&loadSprite("fujikawa_runway_cone_01"),
-                                  &loadSprite("fujikawa_runway_cone_02")};
-    const SpriteTex& spMarker = loadSprite("fujikawa_runway_marker");
-    const SpriteTex& spWindsock = loadSprite("fujikawa_windsock");
-    const SpriteTex* spWeed[4] = {&loadSprite("fujikawa_weed_01"), &loadSprite("fujikawa_weed_02"),
-                                  &loadSprite("fujikawa_weed_03"), &loadSprite("fujikawa_weed_04")};
-    const SpriteTex* spShrub[2] = {&loadSprite("fujikawa_shrub_01"), &loadSprite("fujikawa_shrub_02")};
-    const SpriteTex& spPampas = loadSprite("fujikawa_pampas_grass");
-    const SpriteTex* spTree[2] = {&loadSprite("fujikawa_tree_01"), &loadSprite("fujikawa_tree_02")};
-    const SpriteTex& spConifer = loadSprite("fujikawa_conifer_cluster");
-    const SpriteTex& spHangar = loadSprite("fujikawa_hangar");
-    const SpriteTex& spTrailer = loadSprite("fujikawa_glider_trailer");
-    const SpriteTex& spTractor = loadSprite("fujikawa_tow_tractor");
-    const SpriteTex& spCabinet = loadSprite("fujikawa_equipment_cabinet");
-    const SpriteTex& spDrum = loadSprite("fujikawa_maintenance_drum");
-    const SpriteTex& spRadio = loadSprite("fujikawa_radio_table");
-    const SpriteTex& spBarrier = loadSprite("fujikawa_barrier");
-    const SpriteTex& spStairs = loadSprite("fujikawa_levee_stairs");
-    const SpriteTex& spMound = loadSprite("fujikawa_gravel_mound");
-    const SpriteTex& spDrift = loadSprite("fujikawa_driftwood");
-    std::vector<glm::dvec3> coniferSpots;   // 山肌の麓(ループ内で収集→スプライトパスで描画)
     envList_ = glGenLists(1);
     glNewList(envList_, GL_COMPILE);
     auto toW = [](double x, double yl) { return glm::dvec3(yl, 0, -x); };
@@ -1062,11 +853,7 @@ void Renderer3D::buildEnvFujikawa() {
     const double RWY_N = site::FUJI_RWY_NORTH_Z;
     const double RWY_CZ = (RWY_S + RWY_N) / 2;
     const double RWY_LEN2 = site::FUJI_RWY_LENGTH + 20;
-    // 干し場は置かず、滑走路西側を連続した開けた河川敷として残す。
-    // 格納庫へ通じる細い管理路だけを維持する。
-    setColor(0x74746d); drawGroundQuad(161, 0.054, 650, 6, 250);
-    // 格納庫前の舗装エプロン(位置は西側に再配置した格納庫クラスタと同じ。-150シフト後)
-    setColor(0x898983); drawGroundQuad(60, 0.05, 785, 70, 90);
+    // 干し場・格納庫・管理設備は置かず、滑走路西側を開けた河川敷として残す。
     // 滑走路再設計(850×30m, z=10..860): 中心線から±15mが舗装、その外側±5m(15〜20m)が
     // 薄茶色の肩、さらに外側5〜15m(20〜30m)が芝(草)色の地面。ユーザー指定の縁取り仕様
     setColor(0xb7aa8a);   // 薄茶色の肩(舗装縁+5m)
@@ -1262,45 +1049,6 @@ void Renderer3D::buildEnvFujikawa() {
     glEnable(GL_LIGHTING);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
-    // 格納庫・吹き流し: 衛星写真に基づき格納庫は滑走路の「西側」、北端(RWY18側=海から遠い側)寄りに
-    // 再配置(旧: 東側yl=-60は写真と逆だったため西側+yl=+60へミラー移動)。
-    // 850m再設計に伴い-150シフトして新しい北端(860)の手前に収める。描画はリスト末尾のスプライトパスで行う
-
-    // ---- 河川敷の植生(第5弾→第7弾でスプライト主体に。第8弾で川の東移動に合わせ再配置) ----
-    // 川が滑走路の東すぐ(近岸約45〜60m)に来たため、雑草・低木の散布は西側に限定する。
-    // プロシージャル雑草・低木は数を1/3に減らし
-    // (55→18, 12→4)、スプライト草80〜120枚と併用
-    auto gravelClear = [](double x, double z) {
-        if (x < 32 || x > 550) return false;         // 滑走路の芝帯(〜30m)・東は川・西遠方は除外
-        if (x > 32 && x < 100 && z > 740 && z < 820) return false;   // 格納庫・エプロン(西側)
-        return true;
-    };
-    {
-        int placed = 0;
-        while (placed < 35) {
-            const double x = 15 + rnd(rng) * 535;
-            const double z = -850 + rnd(rng) * 2500;
-            if (!gravelClear(x, z)) continue;
-            drawGrassTuft(rng, {x, 0.05, z}, 0.45 + rnd(rng) * 0.5);
-            placed++;
-        }
-        for (int i = 0; i < 8; i++) {
-            double x, z;
-            do { x = 15 + rnd(rng) * 535; z = -850 + rnd(rng) * 2500; } while (!gravelClear(x, z));
-            drawBush(rng, {x, 0.05, z}, 1.0 + rnd(rng) * 1.1);
-        }
-        for (int i = 0; i < 5; i++) {       // 屋敷林(3〜4本の塊が点在)
-            const double cx2 = -1600 - rnd(rng) * 2600, cz2 = -2200 + rnd(rng) * 4200;
-            const int nT = 3 + (int)(rnd(rng) * 2);
-            for (int tt = 0; tt < nT; tt++)
-                drawTreeBroadleaf(rng, {cx2 + (rnd(rng) - 0.5) * 55, 0, cz2 + (rnd(rng) - 0.5) * 55},
-                                  9 + rnd(rng) * 4);
-        }
-        // 川向こう(西)の田畑の縁にも数本
-        for (int i = 0; i < 6; i++)
-            drawTreeBroadleaf(rng, {1300 + rnd(rng) * 500, 0, -1500 + i * 500 + (rnd(rng) - 0.5) * 80},
-                              8 + rnd(rng) * 4);
-    }
     // 山: 西(yl>1500, ワールド+X)は天守山地=高い、東(-X)は低い丘
     // 第5弾: drawMountainRidge化(標高グラデーション+肩コーン)+麓に針葉樹クラスタ
     for (int i = 0; i < 26; i++) {
@@ -1313,14 +1061,6 @@ void Renderer3D::buildEnvFujikawa() {
         const double ex = -3000 - rnd(rng) * 2200, ez = zx + (rnd(rng) - 0.5) * 600;
         drawMountainRidge(rng, {ex, -4, ez}, wv * 0.9, 180 + rnd(rng) * 220,
                           i % 2 ? 0x718371 : 0x667866);
-        // 山肌の麓の針葉樹: 第7弾でconifer_clusterスプライトに置換(位置だけ収集)
-        if (wz > -1500 && wz < 2200) {
-            const int nT = 2 + (int)(rnd(rng) * 2);
-            for (int tt = 0; tt < nT; tt++) {
-                const double ta = rnd(rng) * 2 * PI, td = wv * (0.85 + rnd(rng) * 0.5);
-                coniferSpots.push_back({wx + std::cos(ta) * td, 0.03, wz + std::sin(ta) * td});
-            }
-        }
     }
     // 富士山(北東=コースx≈-14000, yl≈-11000 → ワールド X=-11000, Z=+14000)
     // 第5弾美化: 中腹の肩コーン+段階的な冠雪(裾野=青灰→中腹→雪線)
@@ -1333,165 +1073,6 @@ void Renderer3D::buildEnvFujikawa() {
     drawCone(-11000, 2150, 14000, 1900, 1100, 10);   // 冠雪
     setColor(0xe6ecf2);
     drawCone(-11000, 1750, 14000, 2350, 700, 10);    // 雪線の裾(淡いグラデーション)
-    // ---- 駿河湾の賑わい: 漁船・沖の大型船シルエット・定置網ブイ列 ----
-    {
-        // 漁船(小さな白い船体+操舵室): 沖合(コースx=2000..5000)に散らす
-        auto fishBoat = [&](double px, double pz) {
-            setColor(0xf0f0f0); drawBox(px, 0.35, pz, 2.0, 0.7, 6.0);
-            setColor(0x3a6ea5); drawBox(px, 1.1, pz + 1.2, 1.4, 0.9, 1.8);
-        };
-        for (int i = 0; i < 5; i++)
-            fishBoat((rnd(rng) - 0.5) * 4200, -(2000 + rnd(rng) * 3000));
-        // 水平線近くの大型船シルエット(タンカー/貨物船)
-        setColor(0x7d8b99);
-        drawBox(-2400, 3.4, -9500, 12, 6.8, 110);
-        drawBox(1800, 3.0, -11000, 10, 6.0, 90);
-        setColor(0x93a1ae);
-        drawBox(-2400 , 8.6, -9500 + 30, 8, 4.5, 22);   // 船橋
-        // 定置網のブイ列(海岸から沖へ斜めに1本)
-        setColor(0x2f3d4a);
-        for (int i = 0; i < 14; i++) {
-            const double t = i / 13.0;
-            drawSphere({800 + t * 900, 0.15, -(1800 + t * 1400)}, 0.5, 6, 5);
-        }
-    }
-
-    // ---- 滑走路北側: 橋2本(国道1号・富士川橋梁)+簡易道路+スポーツ広場+文化財センター ----
-    // Google Mapsの衛星写真(富士川緑地公園周辺)を参照した簡易表現。滑走路北端(RWY_N=860)
-    // からさらに北へ400〜500mの位置で、国道1号と鉄道橋(富士川橋梁)が並んで川を渡る
-    {
-        auto drawBridge = [&](double z, double x0, double x1, double deckH, double deckW,
-                              unsigned deckCol, unsigned pierCol, bool truss) {
-            const double cx = (x0 + x1) / 2, spanW = std::abs(x1 - x0);
-            setColor(deckCol);
-            drawBox(cx, deckH, z, spanW, 0.6, deckW);
-            setColor(pierCol);
-            for (int i = 1; i < 4; i++) {
-                const double px = x0 + (x1 - x0) * i / 4.0;
-                drawBox(px, deckH * 0.5, z, 2.0, deckH, 2.0);
-            }
-            if (truss) {
-                for (int i = 0; i <= 6; i++) {
-                    const double px = x0 + (x1 - x0) * i / 6.0;
-                    drawBox(px, deckH + 1.2, z - deckW / 2 - 0.3, 0.3, 2.4, 0.3);
-                    drawBox(px, deckH + 1.2, z + deckW / 2 + 0.3, 0.3, 2.4, 0.3);
-                }
-            } else {
-                setColor(0xf2f0e8);
-                drawBox(cx, deckH + 0.4, z - deckW / 2, spanW, 0.3, 0.3);
-                drawBox(cx, deckH + 0.4, z + deckW / 2, spanW, 0.3, 0.3);
-            }
-        };
-        // 国道1号橋(道路橋): 淡灰の橋桁+白い高欄
-        drawBridge(RWY_N + 420, -25, -280, 4.0, 10.0, 0xb0aca0, 0x9a968a, false);
-        // 富士川橋梁(鉄道橋・JR東海道線相当): 鋼色のトラス橋で道路橋と区別
-        drawBridge(RWY_N + 480, -25, -280, 3.6, 8.0, 0x4d5a66, 0x38434c, true);
-
-        // 国道1号・生活道路・スポーツ広場の平面デカールは、角度依存の透け対策で
-        // 冒頭の「地面デカール層」(深度不使用・描画順方式)へ移動した
-
-        // 静岡県埋蔵文化財センター(簡易な建物ボリューム): 河川敷のさらに西
-        setColor(0xcfc9ba);
-        drawBox(230, 4.0, 460, 22, 8.0, 16);
-        setColor(0xa79f8c);
-        drawBox(230, 8.4, 460, 22.4, 0.6, 16.4);   // 屋根の帯
-    }
-
-    // ==== 画像スプライト配置(第7弾) ====
-    spriteStateOn();
-    {
-        // 滑走路コーン: 舗装縁(±15m)から2m外(±17m)へ配置。850m再設計に合わせて範囲更新
-        for (double z = 20; z <= 850; z += 80) {
-            spriteCross(*spCone[((int)(z / 80)) % 2], {-17, 0.09, z}, 0.5);
-            spriteCross(*spCone[((int)(z / 80) + 1) % 2], {17, 0.09, z}, 0.5);
-        }
-        // スレッショルドマーカー: 両端の脇
-        spriteCross(spMarker, {-17, 0.09, 12}, 0.9);
-        spriteCross(spMarker, {17, 0.09, 12}, 0.9);
-        spriteCross(spMarker, {-17, 0.09, 858}, 0.9);
-        spriteCross(spMarker, {17, 0.09, 858}, 0.9);
-        // 吹き流し: 滑走路中央脇(高さ~7m、風向表示は静的)
-        spriteCross(spWindsock, {-25, 0.09, 435}, 8.0);
-        // 西側の河川敷に近景36枚+中遠景36枚。実景の開けた河原を残し、
-        // 近景は交差面、遠景は単面にしてオーバードローを抑える。
-        int placed = 0;
-        while (placed < 72) {
-            const double x = 18 + rnd(rng) * 500;
-            const double z = -50 + rnd(rng) * 950;
-            if (!gravelClear(x, z)) continue;
-            const double r = rnd(rng);
-            const bool nearRunway = x < 190;
-            const SpriteTex* tex;
-            double h;
-            if (r < 0.6) {
-                tex = spWeed[placed % 4];
-                h = 0.5 + rnd(rng) * 0.4;
-            } else if (r < 0.8) {
-                tex = spShrub[placed % 2];
-                h = 0.8 + rnd(rng) * 0.5;
-            } else {
-                tex = &spPampas;
-                h = 1.2 + rnd(rng) * 0.6;
-            }
-            if (nearRunway) spriteCross(*tex, {x, 0.05, z}, h);
-            else spriteQuad(*tex, {x, 0.05, z}, h, rnd(rng) * 180.0);
-            placed++;
-        }
-        // 川の遠岸と河川敷外周に、航空写真で見える低い並木を配置。
-        for (int i = 0; i < 18; i++)
-            spriteQuad(*spTree[i % 2],
-                       {-760 + (rnd(rng) - 0.5) * 35, 0.10, -900 + i * 145 + (rnd(rng) - 0.5) * 45},
-                       5.0 + rnd(rng) * 1.8, 80 + rnd(rng) * 20);
-        for (int i = 0; i < 14; i++)
-            spriteCross(*spTree[(i + 1) % 2],
-                        {520 + (rnd(rng) - 0.5) * 18, 0.06, -40 + i * 86 + (rnd(rng) - 0.5) * 24},
-                        4.0 + rnd(rng) * 1.5);
-        // 針葉樹の群生(conifer_cluster): 山肌の麓(山ループで収集した位置)、高さ8〜12m
-        for (const auto& p : coniferSpots)
-            spriteQuad(spConifer, p, 8.0 + rnd(rng) * 4.0, rnd(rng) * 180.0);
-        // ---- 格納庫・エプロン(衛星写真に基づき滑走路の西側・北端寄りへ配置) ----
-        // 西側(+X)配置。850m再設計に伴い-150シフトして新しい北端(860)の手前に収める
-        spriteQuad(spHangar, {92, 0.06, 810}, 13.0, 90);
-        spriteQuad(spHangar, {125, 0.06, 805}, 10.0, 90);
-        // 格納庫前エプロン(舗装広場、地面ポリゴンは陸地セクションで描画済み)+運営機材
-        spriteQuad(spTrailer, {70, 0.07, 780}, 2.4, 100);
-        spriteQuad(spTractor, {52, 0.07, 765}, 2.1, 80);
-        spriteQuad(spCabinet, {112, 0.07, 768}, 2.2, 90);
-        spriteQuad(spDrum, {103, 0.07, 755}, 1.2, 0);
-        spriteQuad(spRadio, {72, 0.07, 745}, 1.4, 85);
-        // 堤防際のバリア・階段(川の遠岸[最大-700]の外側=堤防上に位置調整、850m全長に再配分)
-        spriteQuad(spBarrier, {-43, 0.11, 80}, 1.2, 90);
-        spriteQuad(spBarrier, {-43, 0.11, 410}, 1.2, 90);
-        spriteQuad(spBarrier, {-43, 0.11, 740}, 1.2, 90);
-        spriteQuad(spStairs, {-42, 0.11, 220}, 2.2, 90);
-        spriteQuad(spStairs, {-42, 0.11, 570}, 2.2, 90);
-        // 護岸・消波ブロック(第8弾・新設): 河口部・海側の滑走路端近くの川岸(近岸すぐ外側)。
-        // drawBoxは非テクスチャ描画のため、スプライト用GLステートを一時的に抜けてから描く
-        {
-            spriteStateOff();
-            setColor(0x74746f);   // 明るいと水面に浮いて見えるため暗めのコンクリ色
-            for (int i = 0; i < 10; i++) {
-                const double z = 20 + i * 24 + (rnd(rng) - 0.5) * 8;
-                const double bx = -45 - rnd(rng) * 4;   // 岸線(-45)沿いに半分掛かる位置
-                const double s = 2.0 + rnd(rng) * 1.4;
-                drawBox(bx, s * 0.3, z, s, s * 0.55, s * 0.8);
-            }
-            spriteStateOn();
-        }
-        // 砂利山・流木: 西側の帯(gravelClear)に点在
-        for (int i = 0; i < 4; i++) {
-            double x, z;
-            do { x = 15 + rnd(rng) * 535; z = -700 + rnd(rng) * 2200; } while (!gravelClear(x, z));
-            spriteQuad(spMound, {x, 0.05, z}, 1.0 + rnd(rng) * 0.5, rnd(rng) * 180);
-        }
-        for (int i = 0; i < 3; i++) {
-            double x, z;
-            do { x = 15 + rnd(rng) * 535; z = -700 + rnd(rng) * 2200; } while (!gravelClear(x, z));
-            spriteQuad(spDrift, {x, 0.05, z}, 0.5 + rnd(rng) * 0.3, rnd(rng) * 180);
-        }
-    }
-    spriteStateOff();
-
     // 雲(2層: 低層=大きく濃い/高層=小さく淡い)
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -2186,40 +1767,6 @@ void Renderer3D::drawStartArrow(const glm::dvec3& pos, double hdgRad) {
     glEnable(GL_LIGHTING);
 }
 
-// ---------- クラッシュエフェクト ----------
-// 水面上を旋回するカモメ(白いV字。tickFxで進む時刻でゆっくり周回+羽ばたき)
-// envListに焼かず毎フレーム描画するが、7羽×三角2枚なので負荷は無視できる
-void Renderer3D::drawGulls() {
-    glPushAttrib(GL_ENABLE_BIT | GL_CURRENT_BIT);
-    glDisable(GL_LIGHTING);
-    setColor(0xffffff);
-    const int N = 7;
-    for (int i = 0; i < N; i++) {
-        const double ph = gullT_ * (0.22 + 0.05 * (i % 3)) + i * 2.39996;   // 黄金角で分散
-        // 周回中心: 琵琶湖=会場沖 / 富士川=海岸付近
-        const glm::dvec3 cen = site_ == "fujikawa"
-            ? glm::dvec3(-350 + i * 130, 16 + (i % 3) * 7, -1450 - i * 120)
-            : glm::dvec3(-80 + i * 40, 13 + (i % 3) * 6, -60 - i * 70);
-        const double r = 24 + 7 * (i % 4);
-        const glm::dvec3 p = cen + glm::dvec3(r * std::cos(ph),
-                                              std::sin(gullT_ * 0.7 + i) * 1.6,
-                                              r * std::sin(ph));
-        const glm::dvec3 fwd(-std::sin(ph), 0, std::cos(ph));                 // 接線方向
-        const glm::dvec3 right = glm::normalize(glm::cross(fwd, glm::dvec3(0, 1, 0)));
-        const double flap = std::sin(gullT_ * 7 + i * 1.7);                   // 羽ばたき
-        const glm::dvec3 tipL = p - right * 0.55 + glm::dvec3(0, flap * 0.30, 0);
-        const glm::dvec3 tipR = p + right * 0.55 + glm::dvec3(0, flap * 0.30, 0);
-        const glm::dvec3 tail = p - fwd * 0.30;
-        glBegin(GL_TRIANGLES);
-        glNormal3d(0, 1, 0);
-        glVertex3d(p.x, p.y, p.z); glVertex3d(tail.x, tail.y, tail.z); glVertex3d(tipL.x, tipL.y, tipL.z);
-        glVertex3d(p.x, p.y, p.z); glVertex3d(tipR.x, tipR.y, tipR.z); glVertex3d(tail.x, tail.y, tail.z);
-        glEnd();
-    }
-    glPopAttrib();
-    glEnable(GL_LIGHTING);
-}
-
 // 設計モード: フラップ区間の緑半透明ハイライト(内翼後縁の帯)
 void Renderer3D::drawFlapHighlight(const AircraftParams& st, const Analysis& an) {
     if (st.flapSpanFrac <= 0.005) return;
@@ -2275,7 +1822,6 @@ void Renderer3D::spawnCrashFx(const glm::dvec3& pos, bool water) {
 }
 void Renderer3D::clearFx() { parts_.clear(); rings_.clear(); colLife_ = 0; }
 void Renderer3D::tickFx(double dt) {
-    gullT_ += dt;   // カモメ周回の時刻(毎フレームGameから呼ばれる)
     for (auto& p : parts_) {
         if (p.life <= 0) continue;
         p.vel.y -= 14 * dt;
@@ -2497,7 +2043,6 @@ void Renderer3D::drawFrame(const std::string& mode, const SimParams& prm, const 
         glCallList(envList_);
         // 湖面スケールグリッドは琵琶湖専用。富士川では川面の色と流路を隠すため重ねない。
         if (prm.site != "fujikawa") drawLakeAndGrid(camPos);
-        drawGulls();               // 水面上を旋回するカモメ
     } else {
         glCallList(designList_);
         // 設計モードのスタジオ演出: 円形床+機体直下のソフト影(半径は現在の翼幅から算出)
