@@ -29,6 +29,10 @@ private:
     bool undoLayout();
     bool redoLayout();
     void installLayout(AirframeGraph next, bool custom, bool recordHistory);
+    std::vector<DesignPanel::MountTarget> mountTargets(BodyPart part) const;
+    bool applyVTailPreset(int preset, std::string& error);
+    bool hasComponent(const std::string& key) const;
+    bool toggleComponent(const std::string& key, std::string& error);
     void setMode(const std::string& mode);
     void placeForMode();
     void startSim();

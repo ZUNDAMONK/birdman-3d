@@ -112,6 +112,14 @@ int Game::run() {
     mountCallbacks.redo = [this] { return redoLayout(); };
     mountCallbacks.canUndo = [this] { return !layoutUndo_.empty(); };
     mountCallbacks.canRedo = [this] { return !layoutRedo_.empty(); };
+    mountCallbacks.targets = [this](BodyPart part) { return mountTargets(part); };
+    mountCallbacks.applyVTailPreset = [this](int preset, std::string& error) {
+        return applyVTailPreset(preset, error);
+    };
+    mountCallbacks.hasComponent = [this](const std::string& key) { return hasComponent(key); };
+    mountCallbacks.toggleComponent = [this](const std::string& key, std::string& error) {
+        return toggleComponent(key, error);
+    };
     design_.build(&st_, [this] { rebuildAircraft(); },
                   [this]() -> const Analysis* { return &an_; }, std::move(mountCallbacks));
     {
@@ -364,6 +372,143 @@ bool Game::redoLayout() {
     layoutRedo_.pop_back();
     layoutUndo_.push_back({graph_, customLayout_});
     installLayout(std::move(next.graph), next.custom, false);
+    return true;
+}
+
+std::vector<DesignPanel::MountTarget> Game::mountTargets(BodyPart part) const {
+    std::vector<DesignPanel::MountTarget> result;
+    const char* id = editablePartId(part);
+    const Part* current = id ? graph_.find(id) : nullptr;
+    if (!current) return result;
+    auto partName = [](const Part& value) {
+        if (value.id == "fuselage") return std::string(u8"胴体");
+        if (value.id == "wing.main") return std::string(u8"主翼");
+        if (value.id == "tail.h") return std::string(u8"水平尾翼");
+        return value.id;
+    };
+    auto hardpointName = [](const std::string& value) {
+        if (value == "hp.wing") return std::string(u8"主翼取付");
+        if (value == "hp.tail.h") return std::string(u8"水平尾翼取付");
+        if (value == "hp.tail.v") return std::string(u8"垂直尾翼取付");
+        if (value == "hp.prop") return std::string(u8"プロペラ取付");
+        if (value == "hp.cockpit") return std::string(u8"コックピット取付");
+        if (value == "hp.tip") return std::string(u8"翼端");
+        return value;
+    };
+    for (const auto& entry : graph_.parts()) {
+        const Part& parent = entry.second;
+        for (const auto& hardpoint : parent.hardpoints) {
+            Mount trial = current->mount;
+            trial.parentId = parent.id;
+            trial.hardpointId = hardpoint.id;
+            AirframeGraph candidate = graph_;
+            if (!candidate.setMount(id, trial)) continue;
+            result.push_back({parent.id, hardpoint.id,
+                              partName(parent) + " / " + hardpointName(hardpoint.id)});
+        }
+    }
+    return result;
+}
+
+bool Game::applyVTailPreset(int preset, std::string& error) {
+    const Part* current = graph_.find("tail.v");
+    if (!current) { error = u8"垂直尾翼がありません"; return false; }
+    Mount mount = current->mount;
+    mount.offset = {};
+    if (preset == 0) {
+        mount.parentId = "fuselage"; mount.hardpointId = "hp.tail.v"; mount.mirror = MirrorMode::None;
+    } else if (preset == 1) {
+        mount.parentId = "tail.h"; mount.hardpointId = "hp.tip"; mount.mirror = MirrorMode::Pair;
+    } else if (preset == 2) {
+        mount.parentId = "wing.main"; mount.hardpointId = "hp.tip"; mount.mirror = MirrorMode::Pair;
+    } else { error = u8"不明な尾翼配置です"; return false; }
+    AirframeGraph candidate = graph_;
+    if (preset != 0) {
+        const Part* parent = candidate.find(mount.parentId);
+        if (!parent) { error = u8"取付先の部品がありません"; return false; }
+        bool hasTip = false;
+        for (const auto& hardpoint : parent->hardpoints) hasTip = hasTip || hardpoint.id == "hp.tip";
+        if (!hasTip) {
+            // schema v3 layouts saved before Phase 0B-4 do not yet contain the
+            // stable tip hardpoints. Add the current-parameter default point
+            // atomically so old custom designs can use the new presets.
+            const AirframeGraph defaults = buildDefaultLayout(st_, an_);
+            const Part* standardParent = defaults.find(mount.parentId);
+            if (!standardParent) { error = u8"標準取付点を生成できません"; return false; }
+            Part replacement = *parent;
+            for (const auto& hardpoint : standardParent->hardpoints)
+                if (hardpoint.id == "hp.tip") replacement.hardpoints.push_back(hardpoint);
+            if (!candidate.replacePart(parent->id, std::move(replacement), &error)) return false;
+        }
+    }
+    if (!candidate.setMount("tail.v", mount, &error)) return false;
+    installLayout(std::move(candidate), true, true);
+    return true;
+}
+
+bool Game::hasComponent(const std::string& key) const {
+    if (key == "gear") {
+        for (const auto& entry : graph_.parts()) if (entry.second.kind == PartKind::Gear) return true;
+        return false;
+    }
+    return graph_.find(key) != nullptr;
+}
+
+bool Game::toggleComponent(const std::string& key, std::string& error) {
+    if (key != "pilot" && key != "fairing" && key != "gear" && key != "boomwing") {
+        error = u8"不明な部品です"; return false;
+    }
+    AirframeGraph candidate = graph_;
+    if (hasComponent(key)) {
+        if (key == "gear") {
+            std::vector<std::string> ids;
+            for (const auto& entry : candidate.parts())
+                if (entry.second.kind == PartKind::Gear) ids.push_back(entry.first);
+            for (const auto& id : ids)
+                if (!candidate.removeSubtree(id, &error)) return false;
+        } else if (!candidate.removeSubtree(key, &error)) return false;
+    } else {
+        const AirframeGraph defaults = buildDefaultLayout(st_, an_);
+        auto add = [&](Part part) {
+            if (candidate.addPart(part, &error)) return true;
+            // A custom graph may already carry the same analysis mass item on
+            // another part. Component composition is visual in Phase 0B, so a
+            // massless copy remains valid until the dedicated physics phase.
+            part.massNodes.clear();
+            return candidate.addPart(std::move(part), &error);
+        };
+        if (key == "pilot" || key == "fairing" || key == "boomwing") {
+            if (const Part* standard = defaults.find(key)) {
+                if (!add(*standard)) return false;
+            } else {
+                Part part;
+                part.id = key;
+                part.kind = key == "pilot" ? PartKind::Pilot
+                          : key == "fairing" ? PartKind::Fairing : PartKind::BoomWing;
+                part.mount.parentId = "fuselage";
+                part.mount.hardpointId = key == "boomwing" ? "hp.boomwing" : "hp.cockpit";
+                if (key == "boomwing") part.mount.mirror = MirrorMode::Pair;
+                if (!add(std::move(part))) return false;
+            }
+        } else {
+            bool added = false;
+            for (const auto& entry : defaults.parts()) {
+                if (entry.second.kind != PartKind::Gear) continue;
+                if (!add(entry.second)) return false;
+                added = true;
+            }
+            if (!added) {
+                for (const auto& spec : {std::pair<const char*, const char*>{"gear.front", "hp.gear.front"},
+                                         {"gear.rear", "hp.gear.rear"}}) {
+                    Part gear;
+                    gear.id = spec.first; gear.kind = PartKind::Gear;
+                    gear.mount.parentId = "fuselage"; gear.mount.hardpointId = spec.second;
+                    if (!add(std::move(gear))) return false;
+                }
+            }
+        }
+    }
+    installLayout(std::move(candidate), true, true);
     return true;
 }
 

@@ -16,6 +16,7 @@ enum class BodyPart { Wing = 0, Prop, Cockpit, HTail, VTail, TailBeam, Count };
 
 class DesignPanel {
 public:
+    struct MountTarget { std::string parentId, hardpointId, label; };
     struct MountEditorCallbacks {
         std::function<bool(BodyPart, Mount&)> get;
         std::function<bool(BodyPart, const Mount&, std::string&)> apply;
@@ -24,6 +25,10 @@ public:
         std::function<bool()> redo;
         std::function<bool()> canUndo;
         std::function<bool()> canRedo;
+        std::function<std::vector<MountTarget>(BodyPart)> targets;
+        std::function<bool(int, std::string&)> applyVTailPreset;
+        std::function<bool(const std::string&)> hasComponent;
+        std::function<bool(const std::string&, std::string&)> toggleComponent;
     };
 
     // onChange: パラメータ変更時(機体再解析・再構築)
@@ -61,6 +66,7 @@ private:
     std::vector<int> sectionsForPart(BodyPart part) const;
     void updateDockRect(float W, float H);
     void loadMountEditor();
+    std::vector<std::string> componentKeys() const;
 
     AircraftParams* st_ = nullptr;
     std::function<void()> onChange_;
@@ -81,6 +87,11 @@ private:
     Mount pendingMount_;
     std::array<Slider, 6> mountSliders_;
     Button mountMirror_, mountApply_, mountCancel_, mountReset_, mountUndo_, mountRedo_;
+    Button mountConnection_;
+    std::array<Button, 3> vtailPresets_;
+    std::array<Button, 3> componentButtons_;
+    std::vector<MountTarget> mountTargets_;
+    std::size_t mountTargetIndex_ = 0;
     bool mountEditable_ = false;
     std::string mountMessage_;
 };

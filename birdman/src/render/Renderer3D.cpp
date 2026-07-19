@@ -1628,7 +1628,7 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
     const auto* propPlaced = placement("prop.main");
     const auto* cockpitPlaced = placement("cockpit");
     const auto* pilotPlaced = placement("pilot");
-    if (!root || !wingPlaced || !htailPlaced || !vtailPlaced || !propPlaced || !cockpitPlaced || !pilotPlaced)
+    if (!root || !wingPlaced || !htailPlaced || !vtailPlaced || !propPlaced || !cockpitPlaced)
         return;
     auto hardpointPos = [&](const char* id) {
         for (const auto& hp : root->hardpoints)
@@ -1640,17 +1640,16 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
     };
     const glm::dvec3 wingPos(wingPlaced->world[3]);
     const glm::dvec3 htailPos(htailPlaced->world[3]);
-    const glm::dvec3 vtailPos(vtailPlaced->world[3]);
     const glm::dvec3 propPos(propPlaced->world[3]);
     const glm::dvec3 cockpitPos(cockpitPlaced->world[3]);
     const glm::dmat4 htailCorrection = correctionFrom(htailPlaced->world, {0.0, htailPos.y, htailPos.z});
-    const glm::dmat4 vtailCorrection = correctionFrom(vtailPlaced->world, {0.0, vtailPos.y, vtailPos.z});
-    const glm::dmat4 pilotCorrection = correctionFrom(pilotPlaced->world, {0.0, 0.0, an.pilotCGx});
+    const glm::dmat4 pilotCorrection = pilotPlaced
+        ? correctionFrom(pilotPlaced->world, {0.0, 0.0, an.pilotCGx}) : glm::dmat4(1.0);
     const auto* fairingPlaced = placement("fairing");
     const glm::dmat4 fairingCorrection = fairingPlaced
         ? correctionFrom(fairingPlaced->world, {0.0, 0.0, st.seatX}) : glm::dmat4(1.0);
     const double hWing = wingPos.y;
-    const double hBoom = vtailPos.y;
+    const double hBoom = hardpointPos("hp.tail.v").y;
     const double half = st.span / 2;
     const double dihT = std::tan((st.jig == "flat" ? 0 : st.dihedral) * PI / 180);
     const double seat = cockpitPos.z;
@@ -1783,17 +1782,17 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
     }
     // パイロット(体幹ポリライン。フェアリングの包含サイズ算出にも使う)
     std::vector<glm::dvec3> pilotBody;
-    {
+    auto Pv = [&](double z, double y) { return glm::dvec3(0, y, z); };
+    if (st.posture == "upright")
+        pilotBody = {Pv(seat+0.02,1.55), Pv(seat+0.02,1.30), Pv(seat,0.68), Pv(seat-0.30,0.80), Pv(seat-0.28,0.42)};
+    else if (st.posture == "semi")
+        pilotBody = {Pv(seat+0.35,1.18), Pv(seat+0.18,1.02), Pv(seat,0.62), Pv(seat-0.50,0.85), Pv(seat-0.80,0.58)};
+    else
+        pilotBody = {Pv(seat+0.50,0.86), Pv(seat+0.30,0.78), Pv(seat,0.60), Pv(seat-0.55,0.92), Pv(seat-0.95,0.68)};
+    if (pilotPlaced) {
         glPushMatrix();
         glMultMatrixd(glm::value_ptr(pilotCorrection));
         setColor(0x2c5f9e);
-        auto Pv = [&](double z, double y) { return glm::dvec3(0, y, z); };
-        if (st.posture == "upright")
-            pilotBody = {Pv(seat+0.02,1.55), Pv(seat+0.02,1.30), Pv(seat,0.68), Pv(seat-0.30,0.80), Pv(seat-0.28,0.42)};
-        else if (st.posture == "semi")
-            pilotBody = {Pv(seat+0.35,1.18), Pv(seat+0.18,1.02), Pv(seat,0.62), Pv(seat-0.50,0.85), Pv(seat-0.80,0.58)};
-        else
-            pilotBody = {Pv(seat+0.50,0.86), Pv(seat+0.30,0.78), Pv(seat,0.60), Pv(seat-0.55,0.92), Pv(seat-0.95,0.68)};
         auto& body = pilotBody;
         for (size_t i = 0; i + 1 < body.size(); i++) {
             drawStrut(body[i], body[i + 1], 0.075, 0.075, 8);
@@ -1813,7 +1812,7 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
         drawStrut(midP, propP, st.drive == "shaft" ? 0.02 : 0.011, st.drive == "shaft" ? 0.02 : 0.011, 6);
     }
     // 着陸装置
-    if (st.gear != "none") {
+    {
         auto wheel = [&](const glm::dvec3& c, double rad) {
             setColor(0x23282e);
             // タイヤ(横向き円盤)
@@ -1855,42 +1854,48 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
         if (st.elevRatio < 1) { setColor(0xf4f8fc); loftWing(TH, stn, 0.0, 1 - st.elevRatio, false); }
         glPopMatrix();
     }
-    // 垂直尾翼(平板ポリゴン)
+    // 垂直尾翼(平板ポリゴン)。Pairを含む全配置を同じgraphから描く。
     {
-        glPushMatrix();
-        glMultMatrixd(glm::value_ptr(vtailCorrection));
-        const double vx = vtailPos.z, vc = st.vChord, vh = st.vHeight;
+        const double vc = st.vChord, vh = st.vHeight;
         std::vector<std::pair<double,double>> sh;   // (z, y) 機体ローカル
         if (st.vShape == "swept") sh = {{-vc*0.2,0},{vc*0.55,vh},{vc*1.05,vh},{vc*0.8,0}};
         else if (st.vShape == "ellipse") sh = {{0,0},{vc*0.05,vh*0.6},{vc*0.5,vh},{vc*0.95,vh*0.6},{vc,0}};
         else if (st.vShape == "delta") sh = {{0,0},{vc*0.4,vh},{vc*0.65,vh},{vc,0}};
         else if (st.vShape == "dorsal") sh = {{-vc*0.1,0},{vc*0.25,vh*0.55},{vc*0.45,vh},{vc*0.7,vh},{vc*0.9,vh*0.4},{vc*0.85,0}};
         else sh = {{0,0},{0,vh},{vc,vh},{vc,0}};
-        setColor(st.rudRatio == 1.0 ? 0xe8590c : 0xf4f8fc);
-        glBegin(GL_TRIANGLES);
-        glNormal3d(1, 0, 0);
-        for (size_t j = 1; j + 1 < sh.size(); j++) {
-            glVertex3d(0.015, vtailPos.y + sh[0].second, vx + sh[0].first);
-            glVertex3d(0.015, vtailPos.y + sh[j].second, vx + sh[j].first);
-            glVertex3d(0.015, vtailPos.y + sh[j + 1].second, vx + sh[j + 1].first);
-        }
-        glEnd();
-        if (st.rudRatio < 1) {   // ラダー部
-            double rx = vc * (1 - st.rudRatio);
-            setColor(0xe8590c);
+        auto drawFin = [&] {
+            setColor(st.rudRatio == 1.0 ? 0xe8590c : 0xf4f8fc);
             glBegin(GL_TRIANGLES);
             glNormal3d(1, 0, 0);
-            glm::dvec2 q0(rx, 0.03), q1(rx + vc * 0.22, vh * 0.95),
-                       q2(vc * (st.vShape == "swept" ? 1.0 : 0.98), vh * 0.95),
-                       q3(vc * (st.vShape == "swept" ? 0.79 : 0.99), 0.03);
-            glVertex3d(0.018, vtailPos.y + q0.y, vx + q0.x); glVertex3d(0.018, vtailPos.y + q1.y, vx + q1.x); glVertex3d(0.018, vtailPos.y + q2.y, vx + q2.x);
-            glVertex3d(0.018, vtailPos.y + q0.y, vx + q0.x); glVertex3d(0.018, vtailPos.y + q2.y, vx + q2.x); glVertex3d(0.018, vtailPos.y + q3.y, vx + q3.x);
+            for (size_t j = 1; j + 1 < sh.size(); j++) {
+                glVertex3d(0.015, sh[0].second, sh[0].first);
+                glVertex3d(0.015, sh[j].second, sh[j].first);
+                glVertex3d(0.015, sh[j + 1].second, sh[j + 1].first);
+            }
             glEnd();
+            if (st.rudRatio < 1) {   // ラダー部
+                const double rx = vc * (1 - st.rudRatio);
+                setColor(0xe8590c);
+                glBegin(GL_TRIANGLES);
+                glNormal3d(1, 0, 0);
+                glm::dvec2 q0(rx, 0.03), q1(rx + vc * 0.22, vh * 0.95),
+                           q2(vc * (st.vShape == "swept" ? 1.0 : 0.98), vh * 0.95),
+                           q3(vc * (st.vShape == "swept" ? 0.79 : 0.99), 0.03);
+                glVertex3d(0.018, q0.y, q0.x); glVertex3d(0.018, q1.y, q1.x); glVertex3d(0.018, q2.y, q2.x);
+                glVertex3d(0.018, q0.y, q0.x); glVertex3d(0.018, q2.y, q2.x); glVertex3d(0.018, q3.y, q3.x);
+                glEnd();
+            }
+        };
+        for (const auto& placed : layout) {
+            if (placed.part->id != "tail.v") continue;
+            glPushMatrix();
+            glMultMatrixd(glm::value_ptr(placed.world));
+            drawFin();
+            glPopMatrix();
         }
-        glPopMatrix();
     }
     // テールビーム翼
-    if (st.boomWing != "none") {
+    {
         setColor(0xc8d8e8);
         auto mkBW = [&](int side, const glm::dvec3& origin) {
             std::vector<Station> stn;
@@ -1914,7 +1919,7 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
     // ---- 半透明部(フェアリングのみ。翼フィルムはwingFilm_メッシュ側) ----
     acFilm_ = glGenLists(1);
     glNewList(acFilm_, GL_COMPILE);
-    if (st.fairing && fairingPlaced) {
+    if (fairingPlaced) {
         glPushMatrix();
         glMultMatrixd(glm::value_ptr(fairingCorrection));
         // 流線型の涙滴フェアリング: パイロット体幹ポリラインから包含要件を採取し、

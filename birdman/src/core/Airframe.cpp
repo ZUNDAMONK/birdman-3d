@@ -500,8 +500,15 @@ AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an) {
     };
 
     Part wing = child("wing.main", PartKind::Wing, "hp.wing");
+    // Phase 0B: wing-mounted equipment (for example twin wingtip fins) uses a
+    // stable hardpoint on the positive-X tip; Pair mirrors the complete child.
+    wing.hardpoints.push_back(hp("hp.tip", glm::dvec3{
+        st.span * 0.5,
+        std::tan(st.dihedral * 3.14159265358979323846 / 180.0) * st.span * 0.5,
+        st.tipChord * 0.4}));
     if (!addWithMass(std::move(wing), 0, root->hardpoints[0].t)) return {};
     Part htail = child("tail.h", PartKind::HTail, "hp.tail.h");
+    htail.hardpoints.push_back(hp("hp.tip", {st.hSpan * 0.5, 0.0, st.hChord * 0.4}));
     if (!addWithMass(std::move(htail), 1, root->hardpoints[1].t)) return {};
     Part vtail = child("tail.v", PartKind::VTail, "hp.tail.v");
     if (!addWithMass(std::move(vtail), 2, root->hardpoints[2].t)) return {};
