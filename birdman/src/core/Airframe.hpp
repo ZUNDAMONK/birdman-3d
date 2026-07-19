@@ -107,6 +107,22 @@ private:
     std::vector<ValidationError> ingestErrors_;
 };
 
+struct MassBreakdown {
+    double totalKg = 0.0;
+    glm::dvec3 cg{0.0};
+    glm::dmat3 I{0.0};
+    struct Item {
+        std::string partId;
+        double kg = 0.0;
+        glm::dvec3 cgWorld{0.0};
+    };
+    std::vector<Item> items;
+};
+
+// resolve()した全インスタンスを集約し、全機重心まわりの慣性を平行軸の定理で求める。
+// Pair部品のMassNode::kgは片側分として2インスタンスへ自動計上される。
+MassBreakdown aggregateMass(const AirframeGraph& graph);
+
 // 既存パラメータを真実の源として、決定的な標準機Layoutを生成する。
 AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an);
 

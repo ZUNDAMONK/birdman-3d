@@ -310,6 +310,9 @@ void defaultLayoutTests() {
             check(analysisUse[item] == 1, "analysis mass item used once " + std::to_string(item) + ": " + variant);
         check(near(totalKg, an.W, 1e-9), "layout mass total golden: " + variant);
         check(near(zMoment / totalKg, an.xCG, 1e-9), "layout mass cg golden: " + variant);
+        const bm::MassBreakdown aggregate = bm::aggregateMass(graph);
+        check(near(aggregate.totalKg, an.W, 1e-9), "aggregate mass total golden: " + variant);
+        check(near(aggregate.cg.z, an.xCG, 1e-9), "aggregate mass cg golden: " + variant);
     }
 
     bm::AircraftParams st;
@@ -326,6 +329,56 @@ void defaultLayoutTests() {
             for (const auto& mass : entry.second.massNodes) totalKg += mass.kg;
         check(near(totalKg, an.W, 1e-9), "boomwing layout mass total: " + mode);
     }
+}
+
+void aggregateMassTests() {
+    bm::AirframeGraph pair;
+    bm::Part root;
+    root.id = "fuselage";
+    root.kind = bm::PartKind::Fuselage;
+    root.hardpoints.push_back({"hp.pair", {{2.0, 0.0, 0.0}, {0.0, 0.0, 0.0}}});
+    check(pair.addPart(root), "aggregate pair root");
+    bm::Part pod = mounted("pod", bm::PartKind::Gear, "fuselage", "hp.pair");
+    pod.mount.mirror = bm::MirrorMode::Pair;
+    bm::MassNode pairMass;
+    pairMass.kg = 3.0;
+    pairMass.cgLocal = {0.5, 0.0, 0.0};
+    pairMass.I0[0][0] = 1.0;
+    pairMass.I0[1][1] = 2.0;
+    pairMass.I0[2][2] = 3.0;
+    pod.massNodes.push_back(pairMass);
+    check(pair.addPart(pod), "aggregate paired pod");
+    const bm::MassBreakdown paired = bm::aggregateMass(pair);
+    check(near(paired.totalKg, 6.0) && near(paired.cg, {0.0, 0.0, 0.0}),
+          "Pair mass and mirrored local CG are counted symmetrically");
+    check(paired.items.size() == 2 && near(paired.items[0].cgWorld.x, 2.5)
+          && near(paired.items[1].cgWorld.x, -2.5), "Pair item world CGs");
+    check(near(paired.I[0][0], 2.0) && near(paired.I[1][1], 41.5)
+          && near(paired.I[2][2], 43.5), "Pair parallel-axis inertia");
+
+    bm::AirframeGraph rotated;
+    bm::Part rotatedRoot;
+    rotatedRoot.id = "fuselage";
+    rotatedRoot.kind = bm::PartKind::Fuselage;
+    rotatedRoot.hardpoints.push_back({"hp.rot", {{0.0, 0.0, 0.0}, {0.0, 0.0, 90.0}}});
+    check(rotated.addPart(rotatedRoot), "aggregate rotated root");
+    bm::Part rotor = mounted("rotor", bm::PartKind::Wing, "fuselage", "hp.rot");
+    bm::MassNode rotatedMass;
+    rotatedMass.kg = 1.0;
+    rotatedMass.I0[0][0] = 1.0;
+    rotatedMass.I0[1][1] = 2.0;
+    rotatedMass.I0[2][2] = 3.0;
+    rotor.massNodes.push_back(rotatedMass);
+    check(rotated.addPart(rotor), "aggregate rotated part");
+    const bm::MassBreakdown rotatedResult = bm::aggregateMass(rotated);
+    check(near(rotatedResult.I[0][0], 2.0) && near(rotatedResult.I[1][1], 1.0)
+          && near(rotatedResult.I[2][2], 3.0), "local inertia rotates into airframe axes");
+
+    bm::Part invalidRoot;
+    invalidRoot.id = "not-fuselage";
+    invalidRoot.kind = bm::PartKind::Wing;
+    const auto invalid = bm::AirframeGraph::fromUntrusted({invalidRoot});
+    check(near(bm::aggregateMass(invalid).totalKg, 0.0), "invalid graph aggregate is empty");
 }
 
 void designJsonV2Tests() {
@@ -436,6 +489,7 @@ int main() {
     validationTests();
     mutationTests();
     defaultLayoutTests();
+    aggregateMassTests();
     designJsonV2Tests();
     if (failures == 0) std::cout << "airframe_test: all checks passed\n";
     return failures == 0 ? 0 : 1;
