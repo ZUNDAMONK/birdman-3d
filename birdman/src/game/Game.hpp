@@ -23,6 +23,12 @@ public:
 private:
     static constexpr double RWY_START = 2000;
     void rebuildAircraft();
+    bool getPartMount(BodyPart part, Mount& out) const;
+    bool applyPartMount(BodyPart part, const Mount& mount, std::string& error);
+    bool resetPartMount(BodyPart part, std::string& error);
+    bool undoLayout();
+    bool redoLayout();
+    void installLayout(AirframeGraph next, bool custom, bool recordHistory);
     void setMode(const std::string& mode);
     void placeForMode();
     void startSim();
@@ -96,6 +102,9 @@ private:
     AircraftParams st_;
     Analysis an_;
     AirframeGraph graph_;
+    struct LayoutSnapshot { AirframeGraph graph; bool custom = false; };
+    bool customLayout_ = false;
+    std::vector<LayoutSnapshot> layoutUndo_, layoutRedo_;
     SimParams prm_;
     SimResult simRes_;
 

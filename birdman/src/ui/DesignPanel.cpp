@@ -22,8 +22,9 @@ Slider DesignPanel::mkSlider(const std::string& label, double* field, double mn,
 }
 
 void DesignPanel::build(AircraftParams* st, std::function<void()> onChange,
-                        std::function<const Analysis*()> getAnalysis) {
-    st_ = st; onChange_ = onChange; getAn_ = getAnalysis;
+                        std::function<const Analysis*()> getAnalysis,
+                        MountEditorCallbacks mountCallbacks) {
+    st_ = st; onChange_ = onChange; getAn_ = getAnalysis; mountCb_ = std::move(mountCallbacks);
     groups_.clear(); sections_.clear();
     AircraftParams* p = st;
     using A = AircraftParams;
@@ -233,6 +234,56 @@ void DesignPanel::build(AircraftParams* st, std::function<void()> onChange,
     closeBtn_.style = 3;
     closeBtn_.charSize = 14;
     closeBtn_.onClick = [this] { close(); };
+
+    const char* mountLabels[6] = {u8"X（右＋）", u8"Y（上＋）", u8"Z（後＋）",
+                                  "Pitch", "Yaw", "Roll"};
+    for (int i = 0; i < 6; ++i) {
+        Slider& slider = mountSliders_[(std::size_t)i];
+        slider.label = mountLabels[i];
+        slider.unit = i < 3 ? " m" : u8" °";
+        slider.minV = i < 3 ? -10.0 : -180.0;
+        slider.maxV = i < 3 ? 10.0 : 180.0;
+        slider.step = i < 3 ? 0.05 : 1.0;
+        slider.get = [this, i] {
+            return i < 3 ? pendingMount_.offset.pos[i] : pendingMount_.offset.rotDeg[i - 3];
+        };
+        slider.set = [this, i](double value) {
+            if (i < 3) pendingMount_.offset.pos[i] = value;
+            else pendingMount_.offset.rotDeg[i - 3] = value;
+            mountMessage_.clear();
+        };
+    }
+    mountMirror_.onClick = [this] {
+        pendingMount_.mirror = pendingMount_.mirror == MirrorMode::Pair ? MirrorMode::None : MirrorMode::Pair;
+        mountMessage_.clear();
+    };
+    mountApply_.label = u8"適用"; mountApply_.style = 1;
+    mountApply_.onClick = [this] {
+        std::string error;
+        if (mountEditable_ && mountCb_.apply && mountCb_.apply(part_, pendingMount_, error)) {
+            mountMessage_ = u8"適用しました";
+            loadMountEditor();
+        } else if (!error.empty()) mountMessage_ = u8"適用できません: " + error;
+    };
+    mountCancel_.label = u8"取消";
+    mountCancel_.onClick = [this] { loadMountEditor(); mountMessage_ = u8"変更を取り消しました"; };
+    mountReset_.label = u8"標準位置";
+    mountReset_.onClick = [this] {
+        std::string error;
+        if (mountEditable_ && mountCb_.reset && mountCb_.reset(part_, error)) {
+            loadMountEditor(); mountMessage_ = u8"標準位置へ戻しました";
+        } else if (!error.empty()) mountMessage_ = u8"戻せません: " + error;
+    };
+    mountUndo_.label = u8"元に戻す";
+    mountUndo_.onClick = [this] { if (mountCb_.undo && mountCb_.undo()) loadMountEditor(); };
+    mountRedo_.label = u8"やり直す";
+    mountRedo_.onClick = [this] { if (mountCb_.redo && mountCb_.redo()) loadMountEditor(); };
+}
+
+void DesignPanel::loadMountEditor() {
+    Mount value;
+    mountEditable_ = mountCb_.get && mountCb_.get(part_, value);
+    if (mountEditable_) pendingMount_ = std::move(value);
 }
 
 // 部位→関連セクション(sections_のindex)。build()内のsec()呼び出し順と対応:
@@ -265,6 +316,8 @@ void DesignPanel::openFor(BodyPart part, sf::Vector2f anchor, float W, float H) 
     open_ = true;
     animT_ = 0;
     updateDockRect(W, H);
+    mountMessage_.clear();
+    loadMountEditor();
     relayout();
 }
 
@@ -273,6 +326,21 @@ void DesignPanel::close() { open_ = false; }
 void DesignPanel::relayout() {
     float y = rect_.top + 40 - scroll_;
     const float x0 = rect_.left + 12, w = rect_.width - 24;
+    if (mountEditable_) {
+        y += 26;
+        for (auto& slider : mountSliders_) { slider.rect = {x0, y, w, 34}; y += 38; }
+        mountMirror_.rect = {x0, y, w, 28}; y += 34;
+        const float bw = (w - 8) / 3;
+        mountApply_.rect = {x0, y, bw, 28};
+        mountCancel_.rect = {x0 + bw + 4, y, bw, 28};
+        mountReset_.rect = {x0 + (bw + 4) * 2, y, bw, 28}; y += 34;
+        mountUndo_.rect = {x0, y, (w - 4) / 2, 26};
+        mountRedo_.rect = {x0 + (w - 4) / 2 + 4, y, (w - 4) / 2, 26}; y += 32;
+        if (!mountMessage_.empty()) y += 26;
+        y += 10;
+    } else {
+        y += 48;
+    }
     for (int si : activeSections_) {
         if (si < 0 || si >= (int)sections_.size()) continue;
         auto& sec = sections_[si];
@@ -314,6 +382,15 @@ bool DesignPanel::handleEvent(const sf::Event& ev, sf::Vector2f m, float W, floa
     relayout();
     bool consumed = false;
     consumed |= closeBtn_.handle(ev, m);
+    if (mountEditable_) {
+        for (auto& slider : mountSliders_) consumed |= slider.handle(ev, m);
+        consumed |= mountMirror_.handle(ev, m);
+        consumed |= mountApply_.handle(ev, m);
+        consumed |= mountCancel_.handle(ev, m);
+        consumed |= mountReset_.handle(ev, m);
+        consumed |= mountUndo_.handle(ev, m);
+        consumed |= mountRedo_.handle(ev, m);
+    }
     for (int si : activeSections_) {
         if (si < 0 || si >= (int)sections_.size()) continue;
         auto& sec = sections_[si];
@@ -355,6 +432,31 @@ void DesignPanel::draw(sf::RenderTarget& rt, const sf::Font& font, float W, floa
     const float top = rect_.top, panelH = rect_.height;
     float y = rect_.top + headerH - scroll_;
     const float x0 = rect_.left + 12, w = rect_.width - 24;
+    if (mountEditable_) {
+        if (y + 20 > top + headerH && y < top + panelH) {
+            drawPanelRect(rt, {x0 - 4, y, w + 8, 22}, A(BLUE_DIM), sf::Color::Transparent, 0);
+            drawText(rt, font, u8"取付位置・角度", x0 + 4, y + 3, 13, A(sf::Color::White), 0, true);
+        }
+        y += 26;
+        for (auto& slider : mountSliders_) { if (slider.rect.top + 34 > top + headerH && slider.rect.top < top + panelH) slider.draw(rt, font, alphaMul); y += 38; }
+        mountMirror_.label = pendingMount_.mirror == MirrorMode::Pair ? u8"左右ミラー: ON" : u8"左右ミラー: OFF";
+        mountMirror_.style = pendingMount_.mirror == MirrorMode::Pair ? 2 : 0;
+        mountUndo_.enabled = mountCb_.canUndo && mountCb_.canUndo();
+        mountRedo_.enabled = mountCb_.canRedo && mountCb_.canRedo();
+        for (Button* button : {&mountMirror_, &mountApply_, &mountCancel_, &mountReset_, &mountUndo_, &mountRedo_})
+            if (button->rect.top + button->rect.height > top + headerH && button->rect.top < top + panelH) button->draw(rt, font, alphaMul);
+        y += 100;
+        if (!mountMessage_.empty()) {
+            const bool bad = mountMessage_.find(u8"ません") != std::string::npos;
+            drawText(rt, font, mountMessage_, x0, y, 10, A(bad ? BAD : TEXT_DIM));
+            y += 26;
+        }
+        y += 10;
+    } else {
+        if (y + 36 > top + headerH && y < top + panelH)
+            drawText(rt, font, u8"この基準部品の取付位置は編集できません", x0, y + 14, 11, A(TEXT_DIM));
+        y += 48;
+    }
     for (int si : activeSections_) {
         if (si < 0 || si >= (int)sections_.size()) continue;
         auto& sec = sections_[si];

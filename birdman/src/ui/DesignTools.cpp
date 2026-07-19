@@ -90,6 +90,9 @@ void DesignTools::build(AircraftParams* st, SimParams* prm,
         reloadDesigns();
         DesignEntry e;
         e.st = *st_;
+        if (cb_.currentLayout) {
+            if (const AirframeGraph* layout = cb_.currentLayout()) e.layout = *layout;
+        }
         char nm[32];
         std::snprintf(nm, sizeof(nm), u8"設計%d", (int)designs_.size() + 1);
         e.name = nm;
@@ -136,7 +139,7 @@ void DesignTools::syncDesignButtons() {
     for (size_t i = 0; i < designs_.size(); i++) {
         svLoad_[i].label = u8"読込"; svLoad_[i].charSize = 11;
         svLoad_[i].onClick = [this, i] {
-            if (i < designs_.size() && cb_.onLoadDesign) cb_.onLoadDesign(designs_[i].st);
+            if (i < designs_.size() && cb_.onLoadDesign) cb_.onLoadDesign(designs_[i]);
         };
         svDel_[i].label = u8"削除"; svDel_[i].charSize = 11;
         svDel_[i].onClick = [this, i] {

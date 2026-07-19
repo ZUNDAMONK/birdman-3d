@@ -13,7 +13,8 @@ namespace bm {
 class DesignTools {
 public:
     struct Callbacks {
-        std::function<void(const AircraftParams&)> onLoadDesign;   // 設計読込→再構築
+        std::function<void(const DesignEntry&)> onLoadDesign;      // 設計読込→再構築
+        std::function<const AirframeGraph*()> currentLayout;       // custom時だけ保存
         std::function<void(double n, bool apply)> onFlexPreview;   // たわみ3D表示
         std::function<double()> lastDist;                          // 直近シミュ距離
         // ミッション/キャリア
