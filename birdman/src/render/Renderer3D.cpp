@@ -1,5 +1,6 @@
 #include "render/Renderer3D.hpp"
 #include "core/Aircraft.hpp"
+#include "core/Airframe.hpp"
 #include "core/Physics.hpp"
 #include "core/Weather.hpp"
 #include "core/SiteConst.hpp"
@@ -1609,14 +1610,36 @@ static double afYAt(const std::vector<std::pair<double, double>>& v, double f) {
 }
 
 // ---------- 機体 ----------
-void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an) {
+void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
+                               const AirframeGraph& graph) {
     if (acOpaque_) { glDeleteLists(acOpaque_, 1); glDeleteLists(acFilm_, 1); glDeleteLists(propList_, 1); }
     const Profile& AF = mainAirfoil();
-    const double hWing = st.posture == "upright" ? 2.4 : 2.0;
-    const double hBoom = hWing - 0.15;
+    const auto layout = graph.resolve();
+    auto partPos = [&](const char* id) {
+        for (const auto& placed : layout)
+            if (!placed.mirrored && placed.part->id == id) return glm::dvec3(placed.world[3]);
+        return glm::dvec3(0.0);
+    };
+    const Part* root = graph.find("fuselage");
+    auto hardpointPos = [&](const char* id) {
+        for (const auto& hp : root->hardpoints)
+            if (hp.id == id) return glm::dvec3(transformMatrix(hp.t)[3]);
+        return glm::dvec3(0.0);
+    };
+    const glm::dvec3 wingPos = partPos("wing.main");
+    const glm::dvec3 htailPos = partPos("tail.h");
+    const glm::dvec3 vtailPos = partPos("tail.v");
+    const glm::dvec3 propPos = partPos("prop.main");
+    const glm::dvec3 cockpitPos = partPos("cockpit");
+    const double hWing = wingPos.y;
+    const double hBoom = vtailPos.y;
     const double half = st.span / 2;
     const double dihT = std::tan((st.jig == "flat" ? 0 : st.dihedral) * PI / 180);
-    const double seat = st.seatX;
+    const double seat = cockpitPos.z;
+    wingH_ = wingPos.y;
+    wingZ_ = wingPos.z;
+    propH_ = propPos.y;
+    propZ_ = propPos.z;
 
     // ---- 主翼: たわみ変形メッシュとして構築 (JS applyFlex相当の頂点変形) ----
     flexBasis_ = computeFlexBasis(st, an);
@@ -1629,7 +1652,7 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an) {
         em.m = &wingOpq_;
         for (int side : {1, -1}) {
             auto stn = wingStations(st, side);
-            for (auto& s : stn) { s.y0 += hWing; s.z0 += st.wingX; }
+            for (auto& s : stn) { s.y0 += hWing; s.z0 += wingPos.z; }
             // プランク(上下前縁+後縁)
             em.color(0xe7d9b8);
             em.loftSkin(AF, stn, 0, st.plankTop / 100, true);
@@ -1641,7 +1664,7 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an) {
             em.color(0x2c5f9e);
             for (double y = st.ribPitch; y < half * 0.985; y += st.ribPitch) {
                 const double t = y / half, ch = chordAt(st, t);
-                const double bx = side * y, by = hWing + dihT * y, bz = st.wingX;
+                const double bx = side * y, by = hWing + dihT * y, bz = wingPos.z;
                 std::vector<std::pair<double, double>> poly;
                 for (auto it = AF.up.rbegin(); it != AF.up.rend(); ++it) poly.push_back(*it);
                 for (const auto& p : AF.lo) poly.push_back(p);
@@ -1660,7 +1683,7 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an) {
                 const double ch = chordAt(st, y / half);
                 return glm::dvec3(side * y,
                                   hWing + dihT * y + 0.5 * (upF + loF) * ch,   // 翼型の中心線
-                                  st.wingX + 0.30 * ch);                        // 局所コードの30%
+                                  wingPos.z + 0.30 * ch);                       // 局所コードの30%
             };
             auto sparR = [&](double y) {
                 const double ch = chordAt(st, y / half);
@@ -1691,7 +1714,7 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an) {
                 std::vector<Station> sub;
                 for (int i = 0; i <= 8; i++) {
                     const double y = lerp(yIn, half * 0.98, i / 8.0), t = y / half;
-                    sub.push_back({(double)side * y, chordAt(st, t), hWing + dihT * y, st.wingX});
+                    sub.push_back({(double)side * y, chordAt(st, t), hWing + dihT * y, wingPos.z});
                 }
                 em.loftWing(AF, sub, 1 - st.ailChordFrac, 1, false);
             }
@@ -1708,33 +1731,33 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an) {
     // コックピット枠+テールビーム (JSのトラス)
     {
         setColor(0x1b2a4a);
-        const double zF = seat - 0.55, zR = seat + 0.55, yT = hBoom, yB = 0.36;
-        glm::dvec3 FT(0, yT, zF), FB(0, yB, zF), RT(0, yT, zR), RB(0, yB, zR);
+        const glm::dvec3 FT = hardpointPos("hp.frame.front.top");
+        const glm::dvec3 FB = hardpointPos("hp.frame.front.bottom");
+        const glm::dvec3 RT = hardpointPos("hp.frame.rear.top");
+        const glm::dvec3 RB = hardpointPos("hp.frame.rear.bottom");
         drawStrut(FB, FT, 0.026, 0.026);
         drawStrut(RB, RT, 0.026, 0.026);
         drawStrut(FB, RB, 0.022, 0.022);
         drawStrut(FB, RT, 0.020, 0.020);
-        glm::dvec3 tailEnd(0, hBoom, an.fusLen);
+        const glm::dvec3 tailEnd = hardpointPos("hp.tail.end");
         drawStrut(FT, tailEnd, 0.05, 0.026);
         // 桁ルート(翼側の主桁中心と一致させる: 局所コード30%・翼型中心線)
         const Profile& AFr = mainAirfoil();
         const double upR = afYAt(AFr.up, 0.30), loR = afYAt(AFr.lo, 0.30);
         glm::dvec3 sparRoot(0, hWing + 0.5 * (upR + loR) * st.rootChord,
-                            st.wingX + 0.30 * st.rootChord);
+                            wingPos.z + 0.30 * st.rootChord);
         drawStrut(FT, sparRoot, 0.032, 0.032);
         drawStrut(RT, sparRoot, 0.024, 0.024);
         setColor(0x23282e);
         for (const auto& nd : {FT, RT, sparRoot}) drawSphere(nd, 0.05, 10, 8);
         // 機首ブーム(牽引式)
-        propH_ = st.propConfig == "pylon" ? hBoom + 0.9 : hBoom;
-        propZ_ = an.xProp;
         if (st.propConfig == "tractor") {
             setColor(0x1b2a4a);
-            drawStrut(FT, {0, propH_, an.xProp}, 0.04, 0.028);
+            drawStrut(FT, propPos, 0.04, 0.028);
         }
         if (st.propConfig == "pylon") {
             setColor(0x1b2a4a);
-            drawStrut({0, hBoom, an.xProp}, {0, propH_, an.xProp}, 0.04, 0.03);
+            drawStrut({propPos.x, hBoom, propPos.z}, propPos, 0.04, 0.03);
         }
     }
     // パイロット(体幹ポリライン。フェアリングの包含サイズ算出にも使う)
@@ -1759,7 +1782,7 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an) {
         drawSphere(body[4], 0.06, 8, 6);
         drawStrut(body[4] + glm::dvec3(-0.16, 0, 0), body[4] + glm::dvec3(0.16, 0, 0), 0.02, 0.02, 6);
         // 駆動系: クランク→プロペラ軸のチェーン/シャフトライン
-        glm::dvec3 crankP = body[4], propP(0, propH_, an.xProp);
+        glm::dvec3 crankP = body[4], propP = propPos;
         glm::dvec3 midP(0, clamp(crankP.y, 0.9, propH_), (crankP.z + propP.z) / 2);
         setColor(0x33383f);
         drawStrut(crankP, midP, st.drive == "shaft" ? 0.02 : 0.011, st.drive == "shaft" ? 0.02 : 0.011, 6);
@@ -1767,22 +1790,26 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an) {
     }
     // 着陸装置
     if (st.gear != "none") {
-        auto wheel = [&](double wx, double wz, double rad) {
+        auto wheel = [&](const glm::dvec3& c, double rad) {
             setColor(0x23282e);
             // タイヤ(横向き円盤)
-            glm::dvec3 c(wx, rad, wz);
             drawStrut(c + glm::dvec3(-0.02, 0, 0), c + glm::dvec3(0.02, 0, 0), rad, rad, 14);
             setColor(0x1b2a4a);
             drawStrut(c, c + glm::dvec3(0, 0.55, 0), 0.018, 0.018, 6);
         };
-        if (st.gear == "tri") { wheel(0, seat - 0.55, 0.13); wheel(0.55, seat + 0.45, 0.15); wheel(-0.55, seat + 0.45, 0.15); }
-        else if (st.gear == "tandem") { wheel(0, seat - 0.55, 0.14); wheel(0, seat + 0.55, 0.15); }
-        else { wheel(0, seat + 0.05, 0.16); wheel(0, an.fusLen - 0.3, 0.07); }
+        for (const auto& placed : layout) {
+            if (placed.part->kind != PartKind::Gear) continue;
+            double radius = 0.15;
+            if (placed.part->id == "gear.front") radius = st.gear == "tandem" ? 0.14 : 0.13;
+            else if (placed.part->id == "gear.main" && st.gear == "mono") radius = 0.16;
+            else if (placed.part->id == "gear.tail") radius = 0.07;
+            wheel(glm::dvec3(placed.world[3]), radius);
+        }
     }
     // 水平尾翼(薄い対称翼型ロフト)
     {
         const Profile& TH = thinAirfoil();
-        const double hHalf = st.hSpan / 2, hLE = an.xHT - st.hChord * 0.4;
+        const double hHalf = st.hSpan / 2, hLE = htailPos.z - st.hChord * 0.4;
         const int N = 12;
         std::vector<Station> stn;
         for (int i = 0; i <= N; i++) {
@@ -1792,7 +1819,7 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an) {
             else if (st.hShape == "ellipse") { double w = std::sqrt(std::max(0.05, 1 - ax * ax)); le = hLE + st.hChord * (1 - w) / 2; ch = st.hChord * w; }
             else if (st.hShape == "swept") { le = hLE + st.hChord * 0.38 * ax; ch = st.hChord * (1 - 0.3 * ax); }
             else if (st.hShape == "delta") { le = hLE + st.hChord * 0.55 * ax; ch = st.hChord * (1 - 0.65 * ax); }
-            stn.push_back({u * hHalf, ch, hBoom + 0.02, le});
+            stn.push_back({u * hHalf, ch, htailPos.y, le});
         }
         setColor(0xe8590c);   // 全可動(制御面色)
         loftWing(TH, stn, st.elevRatio < 1 ? 1 - st.elevRatio : 0.0, 1.0, false);
@@ -1800,7 +1827,7 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an) {
     }
     // 垂直尾翼(平板ポリゴン)
     {
-        const double vx = an.xVT, vc = st.vChord, vh = st.vHeight;
+        const double vx = vtailPos.z, vc = st.vChord, vh = st.vHeight;
         std::vector<std::pair<double,double>> sh;   // (z, y) 機体ローカル
         if (st.vShape == "swept") sh = {{-vc*0.2,0},{vc*0.55,vh},{vc*1.05,vh},{vc*0.8,0}};
         else if (st.vShape == "ellipse") sh = {{0,0},{vc*0.05,vh*0.6},{vc*0.5,vh},{vc*0.95,vh*0.6},{vc,0}};
@@ -1811,9 +1838,9 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an) {
         glBegin(GL_TRIANGLES);
         glNormal3d(1, 0, 0);
         for (size_t j = 1; j + 1 < sh.size(); j++) {
-            glVertex3d(0.015, hBoom + sh[0].second, vx + sh[0].first);
-            glVertex3d(0.015, hBoom + sh[j].second, vx + sh[j].first);
-            glVertex3d(0.015, hBoom + sh[j + 1].second, vx + sh[j + 1].first);
+            glVertex3d(0.015, vtailPos.y + sh[0].second, vx + sh[0].first);
+            glVertex3d(0.015, vtailPos.y + sh[j].second, vx + sh[j].first);
+            glVertex3d(0.015, vtailPos.y + sh[j + 1].second, vx + sh[j + 1].first);
         }
         glEnd();
         if (st.rudRatio < 1) {   // ラダー部
@@ -1824,28 +1851,27 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an) {
             glm::dvec2 q0(rx, 0.03), q1(rx + vc * 0.22, vh * 0.95),
                        q2(vc * (st.vShape == "swept" ? 1.0 : 0.98), vh * 0.95),
                        q3(vc * (st.vShape == "swept" ? 0.79 : 0.99), 0.03);
-            glVertex3d(0.018, hBoom + q0.y, vx + q0.x); glVertex3d(0.018, hBoom + q1.y, vx + q1.x); glVertex3d(0.018, hBoom + q2.y, vx + q2.x);
-            glVertex3d(0.018, hBoom + q0.y, vx + q0.x); glVertex3d(0.018, hBoom + q2.y, vx + q2.x); glVertex3d(0.018, hBoom + q3.y, vx + q3.x);
+            glVertex3d(0.018, vtailPos.y + q0.y, vx + q0.x); glVertex3d(0.018, vtailPos.y + q1.y, vx + q1.x); glVertex3d(0.018, vtailPos.y + q2.y, vx + q2.x);
+            glVertex3d(0.018, vtailPos.y + q0.y, vx + q0.x); glVertex3d(0.018, vtailPos.y + q2.y, vx + q2.x); glVertex3d(0.018, vtailPos.y + q3.y, vx + q3.x);
             glEnd();
         }
     }
     // テールビーム翼
     if (st.boomWing != "none") {
-        const double zR = seat + 0.55;
-        glm::dvec3 b0(0, hBoom, zR), b1(0, hBoom, an.fusLen);
-        double bwp = st.boomWingPos;
-        double bwZ = b0.z + (b1.z - b0.z) * bwp, bwY = b0.y + 0.02;
         setColor(0xc8d8e8);
-        auto mkBW = [&](int side) {
+        auto mkBW = [&](int side, const glm::dvec3& origin) {
             std::vector<Station> stn;
             for (int i = 0; i <= 8; i++) {
                 double t = i / 8.0, y = t * st.boomWingSpan / 2;
-                stn.push_back({side * y, st.boomWingChord * (1 - 0.35 * t), bwY, bwZ});
+                stn.push_back({origin.x + side * y, st.boomWingChord * (1 - 0.35 * t), origin.y, origin.z});
             }
             loftWing(thinAirfoil(), stn, 0, 1, true);
         };
-        if (st.boomWing == "L" || st.boomWing == "LR") mkBW(1);
-        if (st.boomWing == "R" || st.boomWing == "LR") mkBW(-1);
+        for (const auto& placed : layout) {
+            if (placed.part->id != "boomwing") continue;
+            const int side = st.boomWing == "R" ? -1 : (placed.mirrored ? -1 : 1);
+            mkBW(side, glm::dvec3(placed.world[3]));
+        }
     }
     glEndList();
 
@@ -2289,22 +2315,21 @@ void Renderer3D::drawGulls() {
 // 設計モード: フラップ区間の緑半透明ハイライト(内翼後縁の帯)
 void Renderer3D::drawFlapHighlight(const AircraftParams& st, const Analysis& an) {
     if (st.flapSpanFrac <= 0.005) return;
-    const double hWing = st.posture == "upright" ? 2.4 : 2.0;
     const double half = st.span / 2, xw = st.flapSpanFrac * half;
     // 後縁30%相当(内翼はほぼ翼根コード)
-    const double z0 = an.wingLE + st.rootChord * 0.68, z1 = an.wingLE + st.rootChord * 1.04;
+    const double z0 = wingZ_ + st.rootChord * 0.68, z1 = wingZ_ + st.rootChord * 1.04;
     glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_CURRENT_BIT | GL_LINE_BIT);
     glDisable(GL_LIGHTING);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE);
     setColor(0x35c97e, 0.28f);
-    drawBox(0, hWing + 0.02, (z0 + z1) / 2, xw * 2, 0.20, z1 - z0);
+    drawBox(0, wingH_ + 0.02, (z0 + z1) / 2, xw * 2, 0.20, z1 - z0);
     // 上面に枠線(区間の視認性を上げる)
     setColor(0x35c97e, 0.9f);
     glLineWidth(1.5f);
     glBegin(GL_LINE_LOOP);
-    const double yTop = hWing + 0.13;
+    const double yTop = wingH_ + 0.13;
     glVertex3d(-xw, yTop, z0); glVertex3d(xw, yTop, z0);
     glVertex3d(xw, yTop, z1);  glVertex3d(-xw, yTop, z1);
     glEnd();

@@ -10,6 +10,8 @@
 
 namespace bm {
 
+class AirframeGraph;
+
 // 画像スプライト(第7弾): PNGをGLテクスチャ化し、アルファ有効範囲(bbox)のUVと
 // クロップ後のアスペクト比を保持する
 struct SpriteTex {
@@ -43,7 +45,8 @@ class Renderer3D {
 public:
     void init();                                  // GLステート初期化(コンテキスト作成後に1回)
     void resize(int w, int h);
-    void buildAircraft(const AircraftParams& st, const Analysis& an);   // 機体メッシュ再構築
+    void buildAircraft(const AircraftParams& st, const Analysis& an,
+                       const AirframeGraph& graph);   // 機体メッシュ再構築
 
     // 1フレーム描画
     // mode: "design" or "flight"。機体変換はJSのaircraft.position/rotationに対応。
@@ -112,6 +115,7 @@ private:
     long flexKey_ = -1;
     unsigned waterTex_ = 0;
     double propH_ = 2.0, propZ_ = 0.35;           // プロペラ取付位置(機体ローカル)
+    double wingH_ = 2.0, wingZ_ = 1.5;            // Layoutから解決した主翼基準位置
     int vpW_ = 1280, vpH_ = 720;
     std::vector<CrashParticle> parts_;
     std::vector<CrashRing> rings_;

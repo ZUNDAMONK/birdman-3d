@@ -258,9 +258,39 @@ void defaultLayoutTests() {
                               {0.0, 1.0, st.seatX}, 1e-12), "cockpit UI golden: " + variant);
         const bm::Part* root = graph.find("fuselage");
         const bm::Hardpoint* tailBeamAnchor = nullptr;
+        const bm::Hardpoint* frameFrontTop = nullptr;
+        const bm::Hardpoint* frameRearTop = nullptr;
+        const bm::Hardpoint* tailEnd = nullptr;
         for (const auto& hp : root->hardpoints) if (hp.id == "hp.ui.tailbeam") tailBeamAnchor = &hp;
+        for (const auto& hp : root->hardpoints) {
+            if (hp.id == "hp.frame.front.top") frameFrontTop = &hp;
+            else if (hp.id == "hp.frame.rear.top") frameRearTop = &hp;
+            else if (hp.id == "hp.tail.end") tailEnd = &hp;
+        }
         check(tailBeamAnchor && near(tailBeamAnchor->t.pos,
             {0.0, hBoom, (st.seatX + 0.55 + an.fusLen) * 0.5}, 1e-12), "tail beam UI golden: " + variant);
+        check(frameFrontTop && near(frameFrontTop->t.pos, {0.0, hBoom, st.seatX - 0.55}, 1e-12),
+              "frame front golden: " + variant);
+        check(frameRearTop && near(frameRearTop->t.pos, {0.0, hBoom, st.seatX + 0.55}, 1e-12),
+              "frame rear golden: " + variant);
+        check(tailEnd && near(tailEnd->t.pos, {0.0, hBoom, an.fusLen}, 1e-12),
+              "tail end golden: " + variant);
+
+        std::vector<glm::dvec3> expectedGear;
+        if (gear == "tandem") expectedGear = {{0.0, 0.14, st.seatX - 0.55}, {0.0, 0.15, st.seatX + 0.55}};
+        else if (gear == "tri") expectedGear = {{0.0, 0.13, st.seatX - 0.55},
+            {0.55, 0.15, st.seatX + 0.45}, {-0.55, 0.15, st.seatX + 0.45}};
+        else if (gear == "mono") expectedGear = {{0.0, 0.16, st.seatX + 0.05},
+            {0.0, 0.07, an.fusLen - 0.3}};
+        std::vector<glm::dvec3> actualGear;
+        for (const auto& item : placed)
+            if (item.part->kind == bm::PartKind::Gear) actualGear.push_back(point(item.world));
+        check(actualGear.size() == expectedGear.size(), "gear instance count golden: " + variant);
+        for (const auto& expected : expectedGear) {
+            bool found = false;
+            for (const auto& actual : actualGear) found = found || near(actual, expected, 1e-12);
+            check(found, "gear position golden: " + variant);
+        }
 
         int analysisUse[11]{};
         double totalKg = 0.0, zMoment = 0.0;
