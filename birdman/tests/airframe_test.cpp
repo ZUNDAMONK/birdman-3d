@@ -110,6 +110,9 @@ void graphResolveTests() {
     check(graph.addPart(tail), "add nested tail");
     const auto resolved = graph.resolve();
     check(resolved.size() == 3, "resolve nested count");
+    check(resolved.size() == 3 && resolved[0].part->id == "body"
+        && resolved[1].part->id == "boom" && resolved[2].part->id == "tail",
+        "resolve returns topological order");
     for (const auto& item : resolved) {
         if (item.part->id == "tail") check(near(point(item.world), {0.0, 1.25, 5.5}), "nested transform position");
     }

@@ -201,11 +201,6 @@ const Part* AirframeGraph::find(const std::string& id) const {
     return it == parts_.end() ? nullptr : &it->second;
 }
 
-Part* AirframeGraph::find(const std::string& id) {
-    const auto it = parts_.find(id);
-    return it == parts_.end() ? nullptr : &it->second;
-}
-
 std::vector<AirframeGraph::ValidationError> AirframeGraph::validate() const {
     std::vector<ValidationError> errors = ingestErrors_;
     std::size_t roots = 0;
@@ -267,6 +262,7 @@ std::vector<AirframeGraph::Placed> AirframeGraph::resolve() const {
     if (!validate().empty()) return {};
     std::map<std::string, std::vector<Placed>> placements;
     placements[rootId_] = {{&parts_.at(rootId_), glm::dmat4(1.0), false}};
+    std::vector<std::string> topologicalOrder{rootId_};
     std::size_t resolved = 1;
     while (resolved < parts_.size()) {
         bool progressed = false;
@@ -289,13 +285,17 @@ std::vector<AirframeGraph::Placed> AirframeGraph::resolve() const {
                 }
             }
             placements.emplace(part.id, std::move(current));
+            topologicalOrder.push_back(part.id);
             ++resolved;
             progressed = true;
         }
         if (!progressed) return {};
     }
     std::vector<Placed> result;
-    for (const auto& entry : placements) result.insert(result.end(), entry.second.begin(), entry.second.end());
+    for (const auto& id : topologicalOrder) {
+        const auto& partPlacements = placements.at(id);
+        result.insert(result.end(), partPlacements.begin(), partPlacements.end());
+    }
     return result;
 }
 

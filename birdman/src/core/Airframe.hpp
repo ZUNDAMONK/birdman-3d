@@ -89,7 +89,6 @@ public:
     bool removeSubtree(const std::string& id, std::string* error = nullptr);
 
     const Part* find(const std::string& id) const;
-    Part* find(const std::string& id);
 
     std::vector<ValidationError> validate() const;
     std::vector<Placed> resolve() const;
