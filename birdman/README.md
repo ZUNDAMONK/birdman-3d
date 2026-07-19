@@ -47,9 +47,16 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DSFML_STATIC_LIBRARIES=TRUE -DSFML_DIR="$PWD/deps/sfml-install/lib/cmake/SFML"
 cmake --build build
 
-# 4) 物理コアテスト(3DOF/6DOF回帰含む)
+# 4) 物理コアテスト(3DOF/6DOF、長時間、気象再現回帰を含む)
+ctest --test-dir build -C Release --output-on-failure
+
+# 詳細な数値出力を直接確認する場合
 ./build/physics_test.exe
 ```
+
+物理テストは30秒の上限時間を設定してあり、失敗または性能の大幅な悪化をCTestで検出します。
+最終検証結果と意図的に残した近似は
+[`PHYSICS_VALIDATION_REPORT.md`](PHYSICS_VALIDATION_REPORT.md)を参照してください。
 
 ## 操作
 
