@@ -1102,15 +1102,16 @@ void Renderer3D::buildEnvFujikawa() {
     glDepthMask(GL_FALSE);
     // 下敷きの薄茶色平面: 全マップ+視程外まで覆い、どこにもカバー漏れの穴が出ないようにする
     glDisable(GL_LIGHTING);
-    setColor(0xcbb896);
+    setColor(0xb7ad96);
     drawGroundQuad(0, -0.3, 0, 34000, 34000);
     glEnable(GL_LIGHTING);
     // 陸: 砂利の河川敷(滑走路周辺)+緑の平野。全方位±15000へ拡張(視程14000の外まで)
-    setColor(0x2f5c3a); drawGroundQuad(0, 0.02, 0, 30000, 30000);    // 河口平野(濃い緑に統一)
-    setColor(0x2c5636); drawGroundQuad(-3350, 0.03, -2500, 5000, 12000); // 東の農地(川の外側、濃い緑)
-    setColor(0x336840); drawGroundQuad(3500, 0.03, -2500, 4500, 12000);  // 西側の緑地(富士川緑地公園等の遠景)
-    // 砂利地: 滑走路西側(格納庫・桜えび干し場の手前)に縮小(東側は川がすぐそこのため無し)
-    setColor(0x2e5a38); drawGroundQuad(260, 0.045, 430, 560, 2700);
+    setColor(0x858a6e); drawGroundQuad(0, 0.02, 0, 30000, 30000);       // 河口平野: 灰緑の低彩度草地
+    setColor(0x7b8268); drawGroundQuad(-3350, 0.03, -2500, 5000, 12000); // 東の農地
+    setColor(0x748263); drawGroundQuad(3500, 0.03, -2500, 4500, 12000);  // 西側の緑地公園・農地
+    // 河川敷は衛星写真の乾いた灰茶色を主色にする。濃緑の巨大面を避け、滑走路・
+    // 干し場・管理路が遠距離でも読み分けられるようにする。
+    setColor(0xa49a82); drawGroundQuad(260, 0.045, 430, 560, 2700);
     const double RWY_S = site::FUJI_RWY_SOUTH_Z;
     const double RWY_N = site::FUJI_RWY_NORTH_Z;
     const double RWY_CZ = (RWY_S + RWY_N) / 2;
@@ -1119,12 +1120,13 @@ void Renderer3D::buildEnvFujikawa() {
     // 北端が1010→860へ150m短縮したため、クラスタ全体を-150ずらして新しい北端の
     // 手前に収める(はみ出し・エプロンとの重なりを避ける)。西端は滑走路の芝帯(〜30m)と
     // 重ならないよう32mから開始する。
-    setColor(0x777b72); drawGroundQuad(161, 0.054, 540, 7, 392);   // 東側の外周路(ラック群右端沿い)
-    setColor(0x9a998e); drawGroundQuad(99, 0.051, 344, 134, 7);    // 南側の区画境界路
-    setColor(0x9a998e); drawGroundQuad(99, 0.051, 734, 134, 7);    // 北側の区画境界路(エプロン手前)
+    setColor(0x686b65); drawGroundQuad(161, 0.054, 540, 7, 392);   // 東側の外周管理路
+    setColor(0x85847b); drawGroundQuad(99, 0.051, 344, 134, 7);    // 南側の区画境界路
+    setColor(0x85847b); drawGroundQuad(99, 0.051, 734, 134, 7);    // 北側の区画境界路
     // 桜えび干し場・農地区画の地表色(遠距離からの視認性用)。実際の3Dラック群の
     // footprintに厳密に一致させる(濃い緑の濃淡を交互にして単色面を解消)。
-    const unsigned fieldCols[6] = {0x2b5934, 0x2f5e39, 0x336339, 0x2a5630, 0x35643d, 0x2d5a35};
+    const unsigned fieldCols[6] = {0x9a927e, 0xa59b83, 0x8d8978,
+                                   0xaaa089, 0x938c78, 0xb0a58e};
     const double fX0 = 32, fX1 = 150, fZ0 = 355, fZ1 = 723;
     const int fCols = 4, fRows = 8;
     for (int row = 0; row < fRows; row++)
@@ -1140,21 +1142,23 @@ void Renderer3D::buildEnvFujikawa() {
         const int col = i % fCols, row = (i / fCols) % fRows;
         const double cx = fX0 + (col + 0.5) * (fX1 - fX0) / fCols + (rnd(rng) - 0.5) * 6;
         const double cz = fZ0 + (row + 0.5) * (fZ1 - fZ0) / fRows + (rnd(rng) - 0.5) * 6;
-        setColor((i % 4) == 0 ? 0x244a2c : 0x292b2b);
+        setColor((i % 4) == 0 ? 0x765448 : 0x292b2b);
         drawGroundQuad(cx, 0.061, cz, 18 + (i % 3) * 4, 26 + (i % 2) * 8);
     }
     // 格納庫前の舗装エプロン(位置は西側に再配置した格納庫クラスタと同じ。-150シフト後)
-    setColor(0xa8a89e); drawGroundQuad(60, 0.05, 785, 70, 90);
+    setColor(0x898983); drawGroundQuad(60, 0.05, 785, 70, 90);
     // 滑走路再設計(850×30m, z=10..860): 中心線から±15mが舗装、その外側±5m(15〜20m)が
     // 薄茶色の肩、さらに外側5〜15m(20〜30m)が芝(草)色の地面。ユーザー指定の縁取り仕様
-    setColor(0xc9b697);   // 薄茶色の肩(舗装縁+5m)
+    setColor(0xb7aa8a);   // 薄茶色の肩(舗装縁+5m)
     drawGroundQuad(-17.5, 0.052, RWY_CZ, 5, RWY_LEN2);
     drawGroundQuad(17.5, 0.052, RWY_CZ, 5, RWY_LEN2);
-    setColor(0x7fa05a);   // 芝(舗装縁5〜15m)。西側(+X)は通常通り10m幅、東側(-X)は
+    setColor(0x89965f);   // 芝(舗装縁5〜15m)。西側(+X)は通常通り10m幅、東側(-X)は
     // 川の近岸(-45)まで延長して水際までの地面を切れ目なく覆う(このあと川面が
     // -45以遠を上塗りするので、境界は描画順で自然に確定する)
     drawGroundQuad(25.0, 0.051, RWY_CZ, 10, RWY_LEN2);
     drawGroundQuad(-35.0, 0.051, RWY_CZ, 30, RWY_LEN2);
+    setColor(0x8e8879);   // 近岸の細い護岸・湿った砂利帯
+    drawGroundQuad(-42.0, 0.052, RWY_CZ, 6, RWY_LEN2 + 120);
 
     // 駿河湾と富士川(デカール層の続き: 深度不使用のまま、陸の上に描画順で重ねる)
     glDisable(GL_BLEND);
@@ -1164,7 +1168,7 @@ void Renderer3D::buildEnvFujikawa() {
     glBindTexture(GL_TEXTURE_2D, biwaWaterTex_ ? biwaWaterTex_ : waterTex_);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
     // 土砂を含む富士川河口の、青みを抑えた灰緑色。
-    glColor4f(0.78f, 0.84f, 0.79f, 1.0f);
+    glColor4f(0.64f, 0.71f, 0.66f, 1.0f);
     const double TR = 62.5;
     glBegin(GL_TRIANGLES);
     {
@@ -1190,17 +1194,35 @@ void Renderer3D::buildEnvFujikawa() {
     glBindTexture(GL_TEXTURE_2D, 0);
     glDisable(GL_TEXTURE_2D);
 
+    // 本流の濁りと流速差。物理上はすべて水域のまま、低コントラストの帯だけを
+    // 重ねて単一色の板に見えるのを防ぐ。帯は共有岸線の内側へ収める。
+    auto riverBand = [&](double x0, double x1, double frac, double halfFrac, unsigned col) {
+        auto point = [&](double x, double f) {
+            const double nearBank = site::FUJI_RIVER_NEAR_BANK;
+            return toW(x, nearBank + (site::fujikawaFarBank(x) - nearBank) * f);
+        };
+        const glm::dvec3 a = point(x0, frac - halfFrac), b = point(x0, frac + halfFrac);
+        const glm::dvec3 c = point(x1, frac + halfFrac), d = point(x1, frac - halfFrac);
+        setColor(col);
+        glBegin(GL_TRIANGLES);
+        glVertex3d(a.x, 0.091, a.z); glVertex3d(b.x, 0.091, b.z); glVertex3d(c.x, 0.091, c.z);
+        glVertex3d(a.x, 0.091, a.z); glVertex3d(c.x, 0.091, c.z); glVertex3d(d.x, 0.091, d.z);
+        glEnd();
+    };
+    riverBand(-3300, 1250, 0.38, 0.055, 0x89978d);
+    riverBand(-2200, 1320, 0.70, 0.035, 0x9aa69b);
+
     // 水面より高い砂州(川面の上に描画順で重ねる。湿った砂利色)
     for (size_t i = 5; i < site::FUJI_SANDBARS.size(); i++) {
         const auto& bar = site::FUJI_SANDBARS[i];
-        setColor(0x968b70);
+        setColor(0xa49a84);
         drawGroundQuad(bar.ylCenter, 0.105, -bar.courseXCenter, bar.ylWidth, bar.courseLength);
     }
     for (size_t i = 0; i < 5; i++) {
         const auto& bar = site::FUJI_SANDBARS[i];
-        setColor(0x7d775f);   // 濡れた縁(暗い砂利)
+        setColor(0x77766c);   // 濡れた縁(暗い砂利)
         drawGroundQuad(bar.ylCenter, 0.099, -bar.courseXCenter, bar.ylWidth, bar.courseLength);
-        setColor(0x968b70);   // 乾いた内側
+        setColor(0xa99e88);   // 乾いた内側
         drawGroundQuad(bar.ylCenter, 0.108, -bar.courseXCenter,
                        bar.ylWidth - 10.0, bar.courseLength - 12.0);
     }
@@ -1213,7 +1235,7 @@ void Renderer3D::buildEnvFujikawa() {
         glDisable(GL_LIGHTING);
         glEnable(GL_TEXTURE_2D);
         glBindTexture(GL_TEXTURE_2D, asphaltTex_);
-        setColor(0x9a9a94);   // 実景の黒褐色に退色した舗装へ寄せる
+        setColor(0x77756f);   // 実景の黒褐色に退色した舗装へ寄せる
         const double RT = 10.0;
         glBegin(GL_TRIANGLES);
         glNormal3d(0, 1, 0);
@@ -1228,7 +1250,7 @@ void Renderer3D::buildEnvFujikawa() {
         glDisable(GL_TEXTURE_2D);
         glEnable(GL_LIGHTING);
     } else {
-        setColor(0x6d7268); drawGroundQuad(0, 0.06, RWY_CZ,
+        setColor(0x625f59); drawGroundQuad(0, 0.06, RWY_CZ,
                                           site::FUJI_RWY_HALF_WIDTH * 2, site::FUJI_RWY_LENGTH);
     }
     glDisable(GL_LIGHTING);
@@ -1274,7 +1296,7 @@ void Renderer3D::buildEnvFujikawa() {
     // 国道1号・生活道路・スポーツ広場などの平面デカール(3D物より前=この層内で描く。
     // 3D物の後に深度なしで描くと樹木の根元などを上塗りしてしまうため)
     {
-        setColor(0xc8bfa0);
+        setColor(0x8e8a7d);
         const double rd1[][2] = {{380, 60}, {370, 260}, {330, 460}, {260, 640},
                                   {150, 800}, {0, RWY_N + 415}};
         for (size_t i = 0; i + 1 < 6; i++) {
@@ -1287,23 +1309,23 @@ void Renderer3D::buildEnvFujikawa() {
             drawGroundQuad(0, 0, 0, 8, len + 2);
             glPopMatrix();
         }
-        setColor(0xb8b0a0);
+        setColor(0x918c80);
         drawGroundQuad(230, 0.055, 620, 5, 260);   // 生活道路のスパー
         // スポーツ広場(緑地パッチ)
-        setColor(0x7ea15f);
+        setColor(0x7f9162);
         drawGroundQuad(300, 0.053, 260, 90, 65);
-        setColor(0x8aab6a);
+        setColor(0x899a6b);
         drawGroundQuad(300, 0.0535, 260, 60, 40);   // 内側の芝目
-        setColor(0x7ea15f);
+        setColor(0x7f9162);
         drawGroundQuad(340, 0.053, 560, 100, 75);
-        setColor(0xc7bfa0);
+        setColor(0xa79d84);
         drawGroundQuad(340, 0.0535, 560, 55, 30);   // ダート内野
-        setColor(0x7ea15f);
+        setColor(0x7f9162);
         drawGroundQuad(280, 0.053, 900, 80, 70);
         // 北東側(川向こう)のソフトボール場・自由広場
-        setColor(0x6f9558);
+        setColor(0x72865e);
         drawGroundQuad(-330, 0.053, RWY_N + 380, 90, 70);
-        setColor(0x77a05f);
+        setColor(0x7b8d63);
         drawGroundQuad(-260, 0.053, RWY_N + 560, 80, 60);
     }
     glEnable(GL_LIGHTING);
@@ -1471,10 +1493,10 @@ void Renderer3D::buildEnvFujikawa() {
         spriteCross(spMarker, {17, 0.09, 858}, 0.9);
         // 吹き流し: 滑走路中央脇(高さ~7m、風向表示は静的)
         spriteCross(spWindsock, {-25, 0.09, 435}, 8.0);
-        // 西側の河川敷に近景60枚+中遠景60枚。近景は交差面、遠景は単面にして
-        // 滑走路周辺の密度を保ちながらオーバードローを抑える。
+        // 西側の河川敷に近景36枚+中遠景36枚。実景の開けた河原を残し、
+        // 近景は交差面、遠景は単面にしてオーバードローを抑える。
         int placed = 0;
-        while (placed < 120) {
+        while (placed < 72) {
             const double x = 18 + rnd(rng) * 500;
             const double z = -50 + rnd(rng) * 950;
             if (!gravelClear(x, z)) continue;
