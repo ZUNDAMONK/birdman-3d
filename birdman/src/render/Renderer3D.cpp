@@ -231,60 +231,6 @@ static void drawMountainRidge(std::mt19937& rng, const glm::dvec3& pos, double w
     }
 }
 
-// ---- 桜えび干し場(第8弾・富士川滑空場の実写再現): 駿河湾特産の桜えび天日干しの
-// 乾燥棚グリッド。遠目には「ソーラーパネル畑」のような黒い区画に見える現地の
-// ランドマーク。1基は黒っぽい網状のフラット面(半透明)+X字の支柱のみの軽量表現
-// (6三角形/基)。pos=中心, w=幅(列方向), l=奥行き(行方向), rotDeg=向きのばらつき
-static void drawShrimpDryingRack(const glm::dvec3& pos, double w, double l, double rotDeg) {
-    const double h = 0.9;   // 脚の高さ(0.8〜1.2m相当)
-    const double a = rotDeg * PI / 180.0;
-    const glm::dvec3 ex(std::cos(a) * w / 2, 0, std::sin(a) * w / 2);
-    const glm::dvec3 ey(-std::sin(a) * l / 2, 0, std::cos(a) * l / 2);
-    const glm::dvec3 top = pos + glm::dvec3(0, h, 0);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDisable(GL_LIGHTING);
-    setColor(0x14141a, 0.72f);   // 黒っぽい網(半透明)
-    glBegin(GL_TRIANGLES);
-    {
-        const glm::dvec3 A = top - ex - ey, B = top + ex - ey, C = top + ex + ey, D = top - ex + ey;
-        glNormal3d(0, 1, 0);
-        glVertex3d(A.x, A.y, A.z); glVertex3d(B.x, B.y, B.z); glVertex3d(C.x, C.y, C.z);
-        glVertex3d(A.x, A.y, A.z); glVertex3d(C.x, C.y, C.z); glVertex3d(D.x, D.y, D.z);
-    }
-    glEnd();
-    setColor(0x2a2a30, 0.85f);   // 脚のX字支柱(細い立ち上げ帯)
-    glBegin(GL_TRIANGLES);
-    {
-        auto strip = [&](const glm::dvec3& base0, const glm::dvec3& base1) {
-            const glm::dvec3 t0 = base0 + glm::dvec3(0, h, 0), t1 = base1 + glm::dvec3(0, h, 0);
-            glNormal3d(0, 0, 1);
-            glVertex3d(base0.x, base0.y, base0.z); glVertex3d(base1.x, base1.y, base1.z); glVertex3d(t1.x, t1.y, t1.z);
-            glVertex3d(base0.x, base0.y, base0.z); glVertex3d(t1.x, t1.y, t1.z); glVertex3d(t0.x, t0.y, t0.z);
-        };
-        strip(pos - ex - ey, pos + ex + ey);
-        strip(pos + ex - ey, pos - ex + ey);
-    }
-    glEnd();
-    glEnable(GL_LIGHTING);
-    glDisable(GL_BLEND);
-}
-
-// 桜えび干し場を格子状(rows×cols)に整列配置。originX/originZ=グリッド中心のワールドXZ、
-// spacingRow/spacingCol=行/列間隔、rackW/rackL=1基のサイズ(間隔よりわずかに小さくして隙間を出す)
-static void drawShrimpDryingField(std::mt19937& rng, double originX, double originZ,
-                                  int rows, int cols, double spacingRow, double spacingCol,
-                                  double rackW, double rackL) {
-    std::uniform_real_distribution<double> rnd(0, 1);
-    const double totalW = (cols - 1) * spacingCol, totalL = (rows - 1) * spacingRow;
-    for (int r = 0; r < rows; r++)
-        for (int c = 0; c < cols; c++) {
-            const double x = originX - totalW / 2 + c * spacingCol;
-            const double z = originZ - totalL / 2 + r * spacingRow;
-            drawShrimpDryingRack({x, 0.02, z}, rackW, rackL, (rnd(rng) - 0.5) * 4);
-        }
-}
-
 // ---------- 翼型 ----------
 struct Profile { std::vector<std::pair<double,double>> up, lo; };
 static const Profile& mainAirfoil() {   // NACA風 camber4% 厚11% (JS airfoilPts)
@@ -1110,41 +1056,15 @@ void Renderer3D::buildEnvFujikawa() {
     setColor(0x7b8268); drawGroundQuad(-3350, 0.03, -2500, 5000, 12000); // 東の農地
     setColor(0x748263); drawGroundQuad(3500, 0.03, -2500, 4500, 12000);  // 西側の緑地公園・農地
     // 河川敷は衛星写真の乾いた灰茶色を主色にする。濃緑の巨大面を避け、滑走路・
-    // 干し場・管理路が遠距離でも読み分けられるようにする。
+    // 管理路が遠距離でも読み分けられるようにする。
     setColor(0xa49a82); drawGroundQuad(260, 0.045, 430, 560, 2700);
     const double RWY_S = site::FUJI_RWY_SOUTH_Z;
     const double RWY_N = site::FUJI_RWY_NORTH_Z;
     const double RWY_CZ = (RWY_S + RWY_N) / 2;
     const double RWY_LEN2 = site::FUJI_RWY_LENGTH + 20;
-    // 桜えび干し場・格納庫クラスタは滑走路の北端(RWY18側)寄り。850m再設計に伴い
-    // 北端が1010→860へ150m短縮したため、クラスタ全体を-150ずらして新しい北端の
-    // 手前に収める(はみ出し・エプロンとの重なりを避ける)。西端は滑走路の芝帯(〜30m)と
-    // 重ならないよう32mから開始する。
-    setColor(0x686b65); drawGroundQuad(161, 0.054, 540, 7, 392);   // 東側の外周管理路
-    setColor(0x85847b); drawGroundQuad(99, 0.051, 344, 134, 7);    // 南側の区画境界路
-    setColor(0x85847b); drawGroundQuad(99, 0.051, 734, 134, 7);    // 北側の区画境界路
-    // 桜えび干し場・農地区画の地表色(遠距離からの視認性用)。実際の3Dラック群の
-    // footprintに厳密に一致させる(濃い緑の濃淡を交互にして単色面を解消)。
-    const unsigned fieldCols[6] = {0x9a927e, 0xa59b83, 0x8d8978,
-                                   0xaaa089, 0x938c78, 0xb0a58e};
-    const double fX0 = 32, fX1 = 150, fZ0 = 355, fZ1 = 723;
-    const int fCols = 4, fRows = 8;
-    for (int row = 0; row < fRows; row++)
-        for (int col = 0; col < fCols; col++) {
-            const double cx = fX0 + (col + 0.5) * (fX1 - fX0) / fCols;
-            const double cz = fZ0 + (row + 0.5) * (fZ1 - fZ0) / fRows;
-            setColor(fieldCols[(row + col * 2) % 6]);
-            drawGroundQuad(cx, 0.053, cz, (fX1 - fX0) / fCols - 4, (fZ1 - fZ0) / fRows - 6);
-        }
-    // 衛星写真で目立つ黒・赤茶の乾燥網区画を地表にも置き、遠距離から形が残るようにする
-    // (同じfootprint内に収め、滑走路・格納庫エプロンへはみ出さないようにする)。
-    for (int i = 0; i < 24; i++) {
-        const int col = i % fCols, row = (i / fCols) % fRows;
-        const double cx = fX0 + (col + 0.5) * (fX1 - fX0) / fCols + (rnd(rng) - 0.5) * 6;
-        const double cz = fZ0 + (row + 0.5) * (fZ1 - fZ0) / fRows + (rnd(rng) - 0.5) * 6;
-        setColor((i % 4) == 0 ? 0x765448 : 0x292b2b);
-        drawGroundQuad(cx, 0.061, cz, 18 + (i % 3) * 4, 26 + (i % 2) * 8);
-    }
+    // 干し場は置かず、滑走路西側を連続した開けた河川敷として残す。
+    // 格納庫へ通じる細い管理路だけを維持する。
+    setColor(0x74746d); drawGroundQuad(161, 0.054, 650, 6, 250);
     // 格納庫前の舗装エプロン(位置は西側に再配置した格納庫クラスタと同じ。-150シフト後)
     setColor(0x898983); drawGroundQuad(60, 0.05, 785, 70, 90);
     // 滑走路再設計(850×30m, z=10..860): 中心線から±15mが舗装、その外側±5m(15〜20m)が
@@ -1347,13 +1267,12 @@ void Renderer3D::buildEnvFujikawa() {
     // 850m再設計に伴い-150シフトして新しい北端(860)の手前に収める。描画はリスト末尾のスプライトパスで行う
 
     // ---- 河川敷の植生(第5弾→第7弾でスプライト主体に。第8弾で川の東移動に合わせ再配置) ----
-    // 川が滑走路の東すぐ(近岸約45〜60m)に来たため、雑草・低木の散布は西側(格納庫・
-    // 桜えび干し場のある側)に限定する。プロシージャル雑草・低木は数を1/3に減らし
+    // 川が滑走路の東すぐ(近岸約45〜60m)に来たため、雑草・低木の散布は西側に限定する。
+    // プロシージャル雑草・低木は数を1/3に減らし
     // (55→18, 12→4)、スプライト草80〜120枚と併用
     auto gravelClear = [](double x, double z) {
         if (x < 32 || x > 550) return false;         // 滑走路の芝帯(〜30m)・東は川・西遠方は除外
         if (x > 32 && x < 100 && z > 740 && z < 820) return false;   // 格納庫・エプロン(西側)
-        if (x > 32 && x < 165 && z > 340 && z < 745) return false;   // 桜えび干し場エリア
         return true;
     };
     {
@@ -1471,7 +1390,7 @@ void Renderer3D::buildEnvFujikawa() {
         // 国道1号・生活道路・スポーツ広場の平面デカールは、角度依存の透け対策で
         // 冒頭の「地面デカール層」(深度不使用・描画順方式)へ移動した
 
-        // 静岡県埋蔵文化財センター(簡易な建物ボリューム): 桜えび干し場のさらに西
+        // 静岡県埋蔵文化財センター(簡易な建物ボリューム): 河川敷のさらに西
         setColor(0xcfc9ba);
         drawBox(230, 4.0, 460, 22, 8.0, 16);
         setColor(0xa79f8c);
@@ -1518,7 +1437,7 @@ void Renderer3D::buildEnvFujikawa() {
             else spriteQuad(*tex, {x, 0.05, z}, h, rnd(rng) * 180.0);
             placed++;
         }
-        // 川の遠岸と干し場外周に、航空写真で見える低い並木を配置。
+        // 川の遠岸と河川敷外周に、航空写真で見える低い並木を配置。
         for (int i = 0; i < 18; i++)
             spriteQuad(*spTree[i % 2],
                        {-760 + (rnd(rng) - 0.5) * 35, 0.10, -900 + i * 145 + (rnd(rng) - 0.5) * 45},
@@ -1540,13 +1459,6 @@ void Renderer3D::buildEnvFujikawa() {
         spriteQuad(spCabinet, {112, 0.07, 768}, 2.2, 90);
         spriteQuad(spDrum, {103, 0.07, 755}, 1.2, 0);
         spriteQuad(spRadio, {72, 0.07, 745}, 1.4, 85);
-        // ---- 桜えび干し場: 格納庫の南側〜滑走路中間点あたりまで、
-        // 滑走路西側の帯状エリアに整列配置(格納庫エプロン・滑走路とは重ならない)。
-        // drawShrimpDryingRackは非テクスチャ・半透明描画のため、スプライト用GLステート
-        // (テクスチャ+アルファテスト)を一時的に抜けてから描く。origin Zも-150シフト
-        spriteStateOff();
-        drawShrimpDryingField(rng, 102, 539, 15, 8, 27, 20, 17, 22);
-        spriteStateOn();
         // 堤防際のバリア・階段(川の遠岸[最大-700]の外側=堤防上に位置調整、850m全長に再配分)
         spriteQuad(spBarrier, {-43, 0.11, 80}, 1.2, 90);
         spriteQuad(spBarrier, {-43, 0.11, 410}, 1.2, 90);
