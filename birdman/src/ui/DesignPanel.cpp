@@ -257,6 +257,8 @@ void DesignPanel::build(AircraftParams* st, std::function<void()> onChange,
         pendingMount_.mirror = pendingMount_.mirror == MirrorMode::Pair ? MirrorMode::None : MirrorMode::Pair;
         mountMessage_.clear();
     };
+    mountMirror_.charSize = 10;
+    mountConnection_.charSize = 10;
     mountConnection_.onClick = [this] {
         if (mountTargets_.empty()) return;
         mountTargetIndex_ = (mountTargetIndex_ + 1) % mountTargets_.size();
@@ -288,6 +290,7 @@ void DesignPanel::build(AircraftParams* st, std::function<void()> onChange,
     const char* presetLabels[3] = {u8"中央尾翼", u8"双尾翼", u8"翼端尾翼"};
     for (int i = 0; i < 3; ++i) {
         vtailPresets_[(std::size_t)i].label = presetLabels[i];
+        vtailPresets_[(std::size_t)i].charSize = 11;
         vtailPresets_[(std::size_t)i].onClick = [this, i] {
             std::string error;
             if (mountCb_.applyVTailPreset && mountCb_.applyVTailPreset(i, error)) {
@@ -296,6 +299,7 @@ void DesignPanel::build(AircraftParams* st, std::function<void()> onChange,
         };
     }
     for (std::size_t i = 0; i < componentButtons_.size(); ++i) {
+        componentButtons_[i].charSize = 10;
         componentButtons_[i].onClick = [this, i] {
             const auto keys = componentKeys();
             if (i >= keys.size()) return;
@@ -393,7 +397,7 @@ void DesignPanel::relayout() {
         const float cw = (w - 8) / 3;
         for (std::size_t i = 0; i < components.size(); ++i)
             componentButtons_[i].rect = {x0 + (float)i * (cw + 4), y, cw, 30};
-        y += 42;
+        y += 58;
     }
     for (int si : activeSections_) {
         if (si < 0 || si >= (int)sections_.size()) continue;
@@ -497,7 +501,8 @@ void DesignPanel::draw(sf::RenderTarget& rt, const sf::Font& font, float W, floa
         }
         y += 26;
         for (auto& slider : mountSliders_) { if (slider.rect.top + 34 > top + headerH && slider.rect.top < top + panelH) slider.draw(rt, font, alphaMul); y += 38; }
-        mountMirror_.label = pendingMount_.mirror == MirrorMode::Pair ? u8"左右ミラー: ON" : u8"左右ミラー: OFF";
+        mountMirror_.label = pendingMount_.mirror == MirrorMode::Pair
+            ? u8"左右ミラー: ON（＋X側を基準に反対側を生成）" : u8"左右ミラー: OFF";
         mountMirror_.style = pendingMount_.mirror == MirrorMode::Pair ? 2 : 0;
         mountConnection_.label = mountTargets_.empty() ? u8"接続先なし"
             : u8"接続先: " + mountTargets_[mountTargetIndex_].label + u8"（クリックで変更）";
@@ -537,7 +542,10 @@ void DesignPanel::draw(sf::RenderTarget& rt, const sf::Font& font, float W, floa
             componentButtons_[i].style = present ? 2 : 0;
             componentButtons_[i].draw(rt, font, alphaMul);
         }
-        y += 42;
+        y += 36;
+        drawText(rt, font, u8"このPhaseでは配置・表示のみ（飛行物理への反映は後続）",
+                 x0, y, 9, A(TEXT_DIM));
+        y += 22;
     }
     for (int si : activeSections_) {
         if (si < 0 || si >= (int)sections_.size()) continue;
