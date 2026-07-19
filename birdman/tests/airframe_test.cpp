@@ -1,10 +1,13 @@
 #include "core/Airframe.hpp"
 #include "core/Aircraft.hpp"
+#include "core/DesignIO.hpp"
 #include "core/MiniJson.hpp"
 
 #include <glm/glm.hpp>
 
 #include <cmath>
+#include <cstdio>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -325,6 +328,105 @@ void defaultLayoutTests() {
     }
 }
 
+void designJsonV2Tests() {
+    bm::AircraftParams saved;
+    saved.span = 31.5;
+    saved.posture = "recumbent";
+    saved.propConfig = "pylon";
+    saved.gear = "tri";
+    saved.fairing = true;
+    saved.sparMat = "m40j";
+    const std::string encoded = bm::aircraftToJson(saved);
+    check(encoded.rfind("{\"schemaVersion\":2,", 0) == 0, "v2 schemaVersion is the first key");
+    check(encoded.find("\"layout\"") == std::string::npos, "Phase 0A does not save generated layout");
+    bm::AircraftParams loaded;
+    const bm::AircraftJsonReport roundTrip = bm::aircraftFromJson(encoded, loaded);
+    check(roundTrip.schemaVersion == 2 && !roundTrip.layoutPresent, "v2 flat document report");
+    check(bm::aircraftToJson(loaded) == encoded, "v2 flat JSON byte-stable round trip");
+
+    const std::string validLayout = R"({
+      "schemaVersion":2,"span":30,
+      "layout":{"units":{"length":"m","angle":"deg","mass":"kg"},"parts":[
+        {"id":"fuselage","kind":"fuselage","hardpoints":[
+          {"id":"hp.wing","pos":[0,2,1.5],"rot":[3,0,0]}]},
+        {"id":"wing.main","kind":"wing","mount":{"parent":"fuselage",
+          "hardpoint":"hp.wing","offset":{"pos":[0,0,0],"rot":[0,0,0]},"mirror":"none"},
+          "mass":{"kg":18.4,"cg":[0,0.05,0.21]}}
+      ]}}
+    )";
+    bm::AircraftParams validParams;
+    const bm::AircraftJsonReport valid = bm::aircraftFromJson(validLayout, validParams);
+    check(valid.schemaVersion == 2 && valid.layoutPresent && valid.layoutAccepted,
+          "valid v2 layout is parsed and accepted");
+    check(near(validParams.span, 30.0), "valid v2 still reads flat parameters");
+    check(bm::buildDefaultLayout(validParams, bm::analyze(validParams)).validate().empty(),
+          "accepted layout is discarded in favor of deterministic Phase 0A layout");
+
+    const std::string tolerantLayout = R"({"schemaVersion":2,"layout":{"parts":[
+      {"id":"fuselage","kind":"fuselage","hardpoints":[{"id":"hp","pos":[0,0,0]}]},
+      {"id":"future","kind":"future-kind","mount":{"parent":"fuselage","hardpoint":"hp",
+       "offset":{"pos":[1,2],"rot":[0,0,0]},"mirror":"future-mode"},"futureField":123}
+    ]}})";
+    bm::AircraftParams tolerantParams;
+    const bm::AircraftJsonReport tolerant = bm::aircraftFromJson(tolerantLayout, tolerantParams);
+    check(tolerant.layoutAccepted && tolerant.warnings.size() >= 3,
+          "unknown kind/mirror and short vec3 fall back with warnings");
+
+    const std::vector<std::string> invalidLayouts = {
+        R"({"schemaVersion":2,"layout":{"parts":[{"id":"fuselage","kind":"fuselage"},{"id":"x","kind":"wing","mount":{"parent":"missing","hardpoint":"hp"}}]}})",
+        R"({"schemaVersion":2,"layout":{"parts":[{"id":"fuselage","kind":"fuselage"},{"id":"fuselage","kind":"fuselage"}]}})",
+        R"({"schemaVersion":2,"layout":{"parts":[{"id":"fuselage","kind":"fuselage","hardpoints":[{"id":"hp","pos":[1001,0,0]}]}]}})"
+    };
+    for (std::size_t i = 0; i < invalidLayouts.size(); ++i) {
+        bm::AircraftParams params;
+        const bm::AircraftJsonReport report = bm::aircraftFromJson(invalidLayouts[i], params);
+        check(report.layoutPresent && !report.layoutAccepted && !report.warnings.empty(),
+              "invalid layout falls back " + std::to_string(i));
+    }
+
+    bm::AircraftParams brokenParams;
+    const bm::AircraftJsonReport broken = bm::aircraftFromJson(
+        "{\"schemaVersion\":2,\"span\":33,\"layout\":{\"parts\":[", brokenParams);
+    check(broken.layoutPresent && !broken.layoutAccepted && near(brokenParams.span, 33.0),
+          "truncated layout falls back without losing readable flat fields");
+
+    bm::AircraftParams futureParams;
+    const bm::AircraftJsonReport future = bm::aircraftFromJson(
+        R"({"schemaVersion":99,"span":34,"layout":{"parts":[]}})", futureParams);
+    check(future.schemaVersion == 99 && future.layoutPresent && !future.layoutAccepted
+          && near(futureParams.span, 34.0), "future schema reads flat fields and ignores layout");
+
+    const std::string legacy = R"({"span":28,"rootChord":1,"tipChord":0.55,"wingX":1.5,
+      "posture":"semi","propConfig":"tractor","gear":"tandem","sparMat":"t700"})";
+    bm::AircraftParams legacyLoaded, legacyExpected;
+    legacyExpected.span = 28; legacyExpected.rootChord = 1; legacyExpected.tipChord = 0.55;
+    legacyExpected.wingX = 1.5; legacyExpected.posture = "semi";
+    legacyExpected.propConfig = "tractor"; legacyExpected.gear = "tandem"; legacyExpected.sparMat = "t700";
+    const bm::AircraftJsonReport legacyReport = bm::aircraftFromJson(legacy, legacyLoaded);
+    const bm::Analysis actual = bm::analyze(legacyLoaded);
+    const bm::Analysis expected = bm::analyze(legacyExpected);
+    check(legacyReport.schemaVersion == 1 && !legacyReport.layoutPresent, "legacy document is v1");
+    check(near(actual.W, expected.W, 1e-12) && near(actual.xCG, expected.xCG, 1e-12)
+          && near(actual.SM, expected.SM, 1e-12) && near(actual.Preq, expected.Preq, 1e-12),
+          "v1 analysis W/xCG/SM/Preq remains unchanged");
+
+    const std::string path = "airframe_v1_designs_test.json";
+    {
+        std::ofstream file(path);
+        file << "{\"designs\":[{\"name\":\"legacy\",\"b\":28,\"W\":0,\"SM\":0,"
+                "\"Preq\":0,\"LD\":0,\"dist\":-1,\"st\":" << legacy << "}]}";
+    }
+    const auto designs = bm::loadDesigns(path);
+    std::remove(path.c_str());
+    check(designs.size() == 1 && designs[0].name == "legacy", "legacy designs.json entry loads");
+    if (designs.size() == 1) {
+        const bm::Analysis fromFile = bm::analyze(designs[0].st);
+        check(near(fromFile.W, expected.W, 1e-12) && near(fromFile.xCG, expected.xCG, 1e-12)
+              && near(fromFile.SM, expected.SM, 1e-12) && near(fromFile.Preq, expected.Preq, 1e-12),
+              "legacy designs.json W/xCG/SM/Preq remains unchanged");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -334,6 +436,7 @@ int main() {
     validationTests();
     mutationTests();
     defaultLayoutTests();
+    designJsonV2Tests();
     if (failures == 0) std::cout << "airframe_test: all checks passed\n";
     return failures == 0 ? 0 : 1;
 }

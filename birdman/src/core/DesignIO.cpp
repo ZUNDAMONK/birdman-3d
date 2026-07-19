@@ -1,6 +1,8 @@
 #include "core/DesignIO.hpp"
+#include "core/Airframe.hpp"
 #include "core/Aircraft.hpp"
 #include "core/Material.hpp"
+#include "core/MiniJson.hpp"
 #include <fstream>
 #include <sstream>
 #include <cstdio>
@@ -69,7 +71,7 @@ std::string aircraftToJson(const AircraftParams& st) {
         o << b << (comma ? "," : "");
     };
     auto str = [&](const char* k, const std::string& v) { o << "\"" << k << "\":\"" << v << "\","; };
-    o << "{";
+    o << "{\"schemaVersion\":2,";
     str("planform", st.planform);
     num("span", st.span); num("rootChord", st.rootChord); num("tipChord", st.tipChord);
     num("wingX", st.wingX); num("dihedral", st.dihedral); num("washout", st.washout);
@@ -103,7 +105,142 @@ std::string aircraftToJson(const AircraftParams& st) {
     return o.str();
 }
 
-void aircraftFromJson(const std::string& s, AircraftParams& st) {
+namespace {
+
+void addWarning(AircraftJsonReport& report, std::string message) {
+    report.warnings.push_back(std::move(message));
+}
+
+static std::string jsonObjectAt(const std::string& s, size_t open) {
+    if (open >= s.size() || s[open] != '{') return {};
+    int depth = 0;
+    bool inString = false, escaped = false;
+    for (size_t i = open; i < s.size(); ++i) {
+        const char c = s[i];
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (c == '\\') escaped = true;
+            else if (c == '"') inString = false;
+            continue;
+        }
+        if (c == '"') inString = true;
+        else if (c == '{') ++depth;
+        else if (c == '}' && --depth == 0) return s.substr(open, i - open + 1);
+    }
+    return {};
+}
+
+std::string stringField(const json::Value* object, const char* key, const std::string& fallback = "") {
+    if (!object || !object->isObject()) return fallback;
+    const json::Value* value = object->find(key);
+    return value && value->isString() ? value->string : fallback;
+}
+
+glm::dvec3 vectorField(const json::Value* object, const char* key,
+                       AircraftJsonReport& report, const std::string& context) {
+    glm::dvec3 result(0.0);
+    if (!object || !object->isObject()) return result;
+    const json::Value* value = object->find(key);
+    if (!value) return result;
+    if (!vec3FromJson(*value, result))
+        addWarning(report, context + "." + key + " must contain exactly three finite numbers; using zero");
+    return result;
+}
+
+AirframeGraph parseLayout(const json::Value& layout, AircraftJsonReport& report) {
+    std::vector<Part> parts;
+    if (!layout.isObject()) {
+        addWarning(report, "layout must be an object");
+        return AirframeGraph::fromUntrusted(std::move(parts));
+    }
+    const json::Value* values = layout.find("parts");
+    if (!values || !values->isArray()) {
+        addWarning(report, "layout.parts must be an array");
+        return AirframeGraph::fromUntrusted(std::move(parts));
+    }
+    for (std::size_t index = 0; index < values->array.size(); ++index) {
+        const json::Value& source = values->array[index];
+        const std::string context = "layout.parts[" + std::to_string(index) + "]";
+        Part part;
+        if (!source.isObject()) {
+            addWarning(report, context + " must be an object");
+            parts.push_back(std::move(part));
+            continue;
+        }
+        part.id = stringField(&source, "id");
+        const std::string kind = stringField(&source, "kind", "unknown");
+        part.kind = partKindFromString(kind);
+        if (part.kind == PartKind::Unknown && kind != "unknown")
+            addWarning(report, context + ".kind is unknown; using unknown");
+
+        if (const json::Value* mount = source.find("mount")) {
+            part.mount.parentId = stringField(mount, "parent");
+            part.mount.hardpointId = stringField(mount, "hardpoint");
+            const json::Value* offset = mount->isObject() ? mount->find("offset") : nullptr;
+            part.mount.offset.pos = vectorField(offset, "pos", report, context + ".mount.offset");
+            part.mount.offset.rotDeg = vectorField(offset, "rot", report, context + ".mount.offset");
+            const std::string mirror = stringField(mount, "mirror", "none");
+            part.mount.mirror = mirrorModeFromString(mirror);
+            if (mirror != "none" && mirror != "pair")
+                addWarning(report, context + ".mount.mirror is unknown; using none");
+        }
+
+        if (const json::Value* hardpoints = source.find("hardpoints")) {
+            if (!hardpoints->isArray()) addWarning(report, context + ".hardpoints must be an array");
+            else for (std::size_t hpIndex = 0; hpIndex < hardpoints->array.size(); ++hpIndex) {
+                const json::Value& hpSource = hardpoints->array[hpIndex];
+                const std::string hpContext = context + ".hardpoints[" + std::to_string(hpIndex) + "]";
+                Hardpoint hp;
+                hp.id = stringField(&hpSource, "id");
+                hp.t.pos = vectorField(&hpSource, "pos", report, hpContext);
+                hp.t.rotDeg = vectorField(&hpSource, "rot", report, hpContext);
+                part.hardpoints.push_back(std::move(hp));
+            }
+        }
+
+        if (const json::Value* mass = source.find("mass")) {
+            if (!mass->isObject()) addWarning(report, context + ".mass must be an object");
+            else {
+                MassNode node;
+                if (const json::Value* kg = mass->find("kg"); kg && kg->isNumber()) node.kg = kg->number;
+                node.cgLocal = vectorField(mass, "cg", report, context + ".mass");
+                if (part.kind != PartKind::Unknown) part.massNodes.push_back(node);
+            }
+        }
+        parts.push_back(std::move(part));
+    }
+    return AirframeGraph::fromUntrusted(std::move(parts));
+}
+
+} // namespace
+
+AircraftJsonReport aircraftFromJson(const std::string& s, AircraftParams& st) {
+    AircraftJsonReport report;
+    json::Value document;
+    json::ParseError parseError;
+    const bool parsed = json::parse(s, document, &parseError);
+    if (parsed && document.isObject()) {
+        if (const json::Value* version = document.find("schemaVersion"); version && version->isNumber())
+            report.schemaVersion = (int)std::lround(version->number);
+        if (const json::Value* layout = document.find("layout")) {
+            report.layoutPresent = true;
+            if (report.schemaVersion > 2) {
+                addWarning(report, "schemaVersion is newer than supported; layout ignored");
+            } else if (report.schemaVersion >= 2) {
+                AirframeGraph candidate = parseLayout(*layout, report);
+                const auto errors = candidate.validate();
+                for (const auto& error : errors)
+                    addWarning(report, "layout " + (error.partId.empty() ? std::string() : error.partId + ": ") + error.message);
+                report.layoutAccepted = errors.empty();
+            } else {
+                addWarning(report, "layout ignored for legacy schema");
+            }
+        }
+    } else if (s.find("\"layout\"") != std::string::npos) {
+        report.layoutPresent = true;
+        addWarning(report, "layout JSON parse failed at byte " + std::to_string(parseError.offset));
+    }
+
     st.planform = jStr(s, "planform", st.planform);
     st.span = jNum(s, "span", st.span);
     st.rootChord = jNum(s, "rootChord", st.rootChord);
@@ -163,6 +300,9 @@ void aircraftFromJson(const std::string& s, AircraftParams& st) {
     st.boomWingSpan = jNum(s, "boomWingSpan", st.boomWingSpan);
     st.boomWingChord = jNum(s, "boomWingChord", st.boomWingChord);
     st.boomWingPos = jNum(s, "boomWingPos", st.boomWingPos);
+    for (const auto& warning : report.warnings)
+        std::fprintf(stderr, "warning: aircraft JSON: %s\n", warning.c_str());
+    return report;
 }
 
 std::vector<DesignEntry> loadDesigns(const std::string& path) {
@@ -188,8 +328,10 @@ std::vector<DesignEntry> loadDesigns(const std::string& path) {
                 e.SM = jNum(obj, "SM", 0); e.Preq = jNum(obj, "Preq", 0);
                 e.LD = jNum(obj, "LD", 0); e.dist = jNum(obj, "dist", -1);
                 size_t stp = obj.find("\"st\":{");
-                if (stp != std::string::npos)
-                    aircraftFromJson(obj.substr(stp + 5), e.st);
+                if (stp != std::string::npos) {
+                    const std::string aircraft = jsonObjectAt(obj, stp + 5);
+                    if (!aircraft.empty()) aircraftFromJson(aircraft, e.st);
+                }
                 v.push_back(std::move(e));
             }
         }

@@ -53,6 +53,8 @@ endif()
 # 物理コア単体テスト(JS版との数値比較用)
 add_executable(physics_test
     tests/physics_test.cpp
+    src/core/Airframe.cpp
+    src/core/MiniJson.cpp
     src/core/Aircraft.cpp
     src/core/Physics.cpp
     src/core/Weather.cpp
@@ -68,6 +70,7 @@ add_executable(airframe_test
     src/core/Aircraft.cpp
     src/core/Physics.cpp
     src/core/Weather.cpp
+    src/core/DesignIO.cpp
 )
 target_include_directories(airframe_test PRIVATE src)
 target_link_libraries(airframe_test PRIVATE glm::glm)
@@ -91,6 +94,8 @@ endif()
 # 機体設計 自動最適化CLI(ヘッドレス・マルチスレッド)
 add_executable(optimize
     tools/optimize.cpp
+    src/core/Airframe.cpp
+    src/core/MiniJson.cpp
     src/core/Aircraft.cpp
     src/core/Physics.cpp
     src/core/Weather.cpp
