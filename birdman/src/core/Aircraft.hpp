@@ -7,6 +7,11 @@ namespace bm {
 double lerp(double a, double b, double t);
 double clamp(double v, double lo, double hi);
 
+// 実飛行・設計解析で共有する環境/機体補正。
+double airDensity(const SimParams& prm);
+double gearDragCoefficient(const AircraftParams& st);
+double propInstallationEfficiency(const AircraftParams& st);
+
 // 翼弦長 (JS chordAt)
 double chordAt(const AircraftParams& p, double t);
 
@@ -23,7 +28,7 @@ struct WingGeom { double S, MAC, AR; };
 WingGeom wingGeom(const AircraftParams& p);
 
 // 総合解析 (JS analyze)
-Analysis analyze(const AircraftParams& st);
+Analysis analyze(const AircraftParams& st, const SimParams* prm = nullptr);
 
 // 空力係数 (JS aeroConsts)
 AeroConsts aeroConsts(const AircraftParams& st);

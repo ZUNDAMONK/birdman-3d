@@ -34,19 +34,9 @@ double groundEffect(double h, double span) {
     return std::max(0.2, r * r / (1.0 + r * r));
 }
 
-// 風速の高度勾配(中立成層のべき乗則 u(h)=u10·(h/10)^0.14)。
-// 基準高10m=アメダス風速計の観測高。地面効果域では向かい風が弱まり、
-// 上空ほど強い — 「向かい風区間は低く飛ぶ」という実際のHPA戦術が成立する
-double windShear(double h) {
-    return std::pow(clamp((h + 0.5) / 10.5, 0.05, 6.0), 0.14);
-}
-
 AircraftConstants aeroPack(const AircraftParams& st, const Analysis& a, const SimParams& prm) {
     AeroConsts ac = aeroConsts(st);
-    // 大気密度: 海面標準を気温で補正(琵琶湖≒標高86m)
-    const double T0 = prm.temp + 273.15;
-    const double P0 = 101325 * std::pow(1 - 2.25577e-5 * 86, 5.2559);
-    const double rho = P0 / (287.05 * T0);
+    const double rho = airDensity(prm);
     const double g = 9.81, W = a.W * g;
     // 失速CL: スライダー上限と翼(LLT)の3D失速CLの小さい方。
     // さらに失速速度でのRe低下によるclmax悪化を反復補正(小翼弦の「Reの壁」)
@@ -81,8 +71,7 @@ AircraftConstants aeroPack(const AircraftParams& st, const Analysis& a, const Si
     }
     // BEMTプロペラテーブルと取付損失
     const PropTables& pt = computeBEMT(st);
-    const double propInst = st.propConfig == "pylon" ? 1.0 : st.propConfig == "midboom" ? 0.97
-                          : st.propConfig == "pusher" ? 0.92 : 0.96;
+    const double propInst = propInstallationEfficiency(st);
     // 最小パワー速度(オートの目標速度)。必要パワーはBEMTで解く
     double Vmp = Vs * 1.1, Pmin = 1e9;
     for (double v = Vs * 1.02; v <= 14; v += 0.1) {
@@ -125,7 +114,7 @@ AircraftConstants aeroPack(const AircraftParams& st, const Analysis& a, const Si
     const double rudRoll = 1.2 * PI / 180 * rudFac * sg;
     const double elevAuth = 0.65 * elevFac * sg;
     const bool hasGear = st.gear != "none";
-    const double gearCD = hasGear ? (st.gear == "tri" ? 0.0016 : st.gear == "tandem" ? 0.0007 : 0.0009) : 0.0;
+    const double gearCD = gearDragCoefficient(st);
 
     AircraftConstants c;
     c.a = a;
@@ -281,8 +270,11 @@ FlightState makeInitialState(const AircraftConstants& c, const SimParams& prm, d
     // 初期対気速度は「プッシャー初速(対地) − 機首方向の風成分」で一般化
     // (startHdg=0では従来式 pushV - prm.wind と一致=後方互換)
     L.psi = runway ? prm.startHdg * PI / 180 : 0;
-    const double wAlong0 = prm.wind * std::cos(L.psi) + prm.xwind * std::sin(L.psi);
-    L.V = runway ? std::max(0.2, prm.pushV - wAlong0) : std::max(0.0, prm.V0 - prm.wind);
+    double wind0 = prm.wind, xwind0 = prm.xwind;
+    if (runway) horizontalWindAt(prm, 0, 0, 0, wind0, xwind0);
+    const double wAlong0 = wind0 * std::cos(L.psi) + xwind0 * std::sin(L.psi);
+    L.groundSpeed = runway ? std::max(0.0, prm.pushV) : -1.0;
+    L.V = runway ? std::abs(L.groundSpeed - wAlong0) : std::max(0.0, prm.V0 - prm.wind);
     L.gam = 0;
     L.h = runway ? 0 : deckHeightAt(-DECK_LEN);
     L.x = runway ? 0 : -DECK_LEN;
@@ -568,9 +560,12 @@ static void applyTouchdown(FlightState& L, const SimParams& prm, double sink, bo
     }
     // 残留横対地速度(機首右向き+): 接地直前の対地速度ベクトルの機首直交成分
     const double vh = L.V * std::cos(L.gam);
-    const double gvx = vh * std::cos(L.psi) + prm.wind * windShear(0.0);
-    const double gvy = vh * std::sin(L.psi) + prm.xwind * windShear(0.0);
+    double wind = 0, xwind = 0;
+    horizontalWindAt(prm, L.x - L.z0, L.yl, 0, wind, xwind);
+    const double gvx = vh * std::cos(L.psi) + wind;
+    const double gvy = vh * std::sin(L.psi) + xwind;
     L.vLat = -gvx * std::sin(L.psi) + gvy * std::cos(L.psi);
+    L.groundSpeed = std::max(0.0, gvx * std::cos(L.psi) + gvy * std::sin(L.psi));
     L.touchdowns++; L.tdT = L.t;
     if (band == 1) {                       // ハードランディング: バウンド
         L.gam = 0.03; L.V *= 0.92; L.h = 0.01;
@@ -633,12 +628,21 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
     }
     if (L.ground) {
         const bool fuji = prm.site == "fujikawa";
+        double groundWind = 0, groundXwind = 0;
+        horizontalWindAt(prm, L.x - L.z0, L.yl, 0, groundWind, groundXwind);
+        const double wAlong = groundWind * std::cos(L.psi) + groundXwind * std::sin(L.psi);
+        const double wCrossRaw = -groundWind * std::sin(L.psi) + groundXwind * std::cos(L.psi);
+        if (L.groundSpeed < 0) L.groundSpeed = std::max(0.0, L.V + wAlong);
+        const double relativeAlong = L.groundSpeed - wAlong;
+        L.V = std::abs(relativeAlong);
+        const bool forwardFlow = relativeAlong >= 0;
+        const double qGround = 0.5 * c.rho * L.V * L.V;
         // 地上滑走のCL: 主翼取付角由来のCLg0(aeroPackで算出)+エレベーター
         // (負=機首下げで揚力を抑えられる)+フラップ。従来の0.8固定を廃止し、
         // 取付角スライダーが離陸滑走距離に物理的に効くようにする
         const double CLg = clamp(c.CLg0 + gustDCL + 0.35 * L.e + 0.8 * c.flapDCL * L.flap,
                                  0.05, (c.CLmax + c.flapDCLmax * L.flap) * 0.95);
-        const double lift = q * c.S * CLg;
+        const double lift = forwardFlow ? qGround * c.S * CLg : 0.0;
         const double CDg = c.CD0 + CLg * CLg / (PI * c.AR * c.e) * groundEffect(0, c.span)
                          + c.flapDCD * L.flap * L.flap;
         // 制動: 転がり摩擦+ブレーキ(Sキー, μ≈0.4のタイヤ制動をキャッチャー相当に)。
@@ -658,13 +662,13 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
         if (L.gearBroken) rollMu = site::FUJI_BROKEN_GEAR_MU;
         const double normal = std::max(0.0, c.W - lift);
         const double roll = (rollMu + 0.40 * clamp(L.brake, 0.0, 1.0)) * normal;
-        const double dV = (T - q * c.S * CDg - roll) / c.m;
-        L.V = std::max(0.0, L.V + dV * dt);
-        // 対地速度: 機首方向の風成分で一般化(ψ=0では従来式 L.V+prm.wind と一致)。
-        // タイヤは後退しないため機軸方向の対地速度は0でクランプ(向かい風で下がらない)
-        const double wAlong = prm.wind * std::cos(L.psi) + prm.xwind * std::sin(L.psi);
-        const double gs = std::max(0.0, L.V + wAlong);
-        const double wCrossRaw = -prm.wind * std::sin(L.psi) + prm.xwind * std::cos(L.psi);
+        const double aeroDrag = qGround * c.S * CDg;
+        const double dragForce = relativeAlong > 0 ? -aeroDrag : relativeAlong < 0 ? aeroDrag : 0.0;
+        const double rollingForce = L.groundSpeed > 0.01 ? roll : 0.0;
+        const double dGroundV = (T + dragForce - rollingForce) / c.m;
+        L.groundSpeed = std::max(0.0, L.groundSpeed + dGroundV * dt);
+        L.V = std::abs(L.groundSpeed - wAlong);
+        const double gs = L.groundSpeed;
         // ---- 地上ステア(第6弾: 車輪ステア型に再設計) ----
         // ステア角 δ = rud × δmax(V)。δmax=25°×clamp(1-(V-4)/12, 0.35, 1)
         // (V≤4m/sで25°、高速では絞る=高速でのスピン防止)。
@@ -732,7 +736,7 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
             if (!L.touchdowns) { L.overrun = true; L.done = true; invalidateOfficialDistance(L); }
             else { L.splash = true; L.done = true; L.impact = "splash"; }   // 滑走で水際を越えた
         }
-        else if (dV <= 0.005 && L.t > 20 && !L.touchdowns) {
+        else if (dGroundV <= 0.005 && L.t > 20 && !L.touchdowns) {
             L.overrun = true; L.done = true; invalidateOfficialDistance(L);
         }
         // 再着陸後に停止したら着陸成功として終了(推力があればV<=0.3に留まらない)
@@ -858,9 +862,10 @@ void stepSim(FlightState& L, const AircraftConstants& c, const SimParams& prm, d
     // 方位を±πに正規化
     if (L.psi > PI) L.psi -= 2 * PI; else if (L.psi < -PI) L.psi += 2 * PI;
     const double vh = L.V * std::cos(L.gam);
-    const double ws3 = windShear(L.h);   // 高度による風速勾配(10m基準)
-    L.x += (vh * std::cos(L.psi) + prm.wind * ws3 + twW) * dt;
-    L.yl += (vh * std::sin(L.psi) + prm.xwind * ws3 + twX + turbVy) * dt;
+    double wind3 = 0, xwind3 = 0;
+    horizontalWindAt(prm, L.x - L.z0, L.yl, L.h, wind3, xwind3);
+    L.x += (vh * std::cos(L.psi) + wind3) * dt;
+    L.yl += (vh * std::sin(L.psi) + xwind3 + turbVy) * dt;
     L.pathAir += std::max(0.0, L.V) * std::cos(L.gam) * dt;
     refreshOfficialDistance(L);
     L.t += dt;
@@ -1081,9 +1086,10 @@ void stepSim6(FlightState& L, const AircraftConstants& c, const SimParams& prm, 
     }
     if (L.psi > PI) L.psi -= 2 * PI; else if (L.psi < -PI) L.psi += 2 * PI;
     const double vh = L.V * std::cos(L.gam);
-    const double ws6 = windShear(L.h);   // 高度による風速勾配(10m基準)
-    L.x += (vh * std::cos(L.psi) + prm.wind * ws6 + twW) * dt;
-    L.yl += (vh * std::sin(L.psi) + prm.xwind * ws6 + twX + L.ty) * dt;
+    double wind6 = 0, xwind6 = 0;
+    horizontalWindAt(prm, L.x - L.z0, L.yl, L.h, wind6, xwind6);
+    L.x += (vh * std::cos(L.psi) + wind6) * dt;
+    L.yl += (vh * std::sin(L.psi) + xwind6 + L.ty) * dt;
     L.pathAir += std::max(0.0, L.V) * std::cos(L.gam) * dt;
     refreshOfficialDistance(L);
     L.t += dt;

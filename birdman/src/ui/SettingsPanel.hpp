@@ -12,7 +12,7 @@ struct SettingsCallbacks {
     std::function<void(const std::string&)> onSite;   // "biwa"/"fujikawa"
     std::function<bool()> soundOn;                    // サウンド状態取得
     std::function<void()> onToggleSound;
-    std::function<bool()> locked;                     // 大会中=true(チート系操作を禁止)
+    std::function<bool()> locked;                     // 飛行中=true(再構築が必要な設定を固定)
 };
 
 class SettingsPanel {

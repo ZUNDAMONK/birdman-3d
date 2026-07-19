@@ -106,12 +106,12 @@ void SettingsPanel::build(SimParams* prm, AircraftParams* st,
 }
 
 void SettingsPanel::syncLabels() {
-    // 大会中はオート・ホールド・天候/物理チート系の操作を封じる
+    // 飛行中は再構築が必要な設定を固定。出力・再生速度・音・風表示だけ変更可。
     const bool lock = cb_.locked && cb_.locked();
-    bAuto_.label = std::string(u8"性能計測オート: ") + (lock ? u8"大会中は禁止" : prm_->auto_ ? "ON" : "OFF");
+    bAuto_.label = std::string(u8"性能計測オート: ") + (lock ? u8"次回発進から" : prm_->auto_ ? "ON" : "OFF");
     bAuto_.style = prm_->auto_ ? 2 : 0;
     bAuto_.enabled = !lock;
-    bHold_.label = std::string(u8"高度ホールド: ") + (lock ? u8"大会中は禁止" : prm_->auto_ ? u8"(オート)" : prm_->hold ? "ON" : "OFF");
+    bHold_.label = std::string(u8"高度ホールド: ") + (lock ? u8"次回発進から" : prm_->auto_ ? u8"(オート)" : prm_->hold ? "ON" : "OFF");
     bHold_.style = (prm_->hold && !prm_->auto_) ? 2 : 0;
     bHold_.enabled = !prm_->auto_ && !lock;
     bSummer_.enabled = !lock;
@@ -122,10 +122,13 @@ void SettingsPanel::syncLabels() {
     bAssist_.enabled = prm_->sixdof && !lock;
     bStamina_.enabled = !lock;
     bFun_.enabled = !lock;
+    bGhost_.enabled = !lock;
+    bPjit_.enabled = !lock;
     bFun_.label = std::string(u8"お遊び: 小型プロペラ機(富士川専用) ") + (prm_->funPlane ? "ON" : "OFF");
     bFun_.style = prm_->funPlane ? 2 : 0;
     for (auto& s : windSliders_) s.enabled = !lock;
-    if (simSliders_.size() > 1) simSliders_[1].enabled = !lock;   // 発進速度
+    for (size_t i = 0; i < simSliders_.size(); ++i)
+        simSliders_[i].enabled = !lock || i == 0 || i == 4; // 出力/再生速度のみ飛行中可
     bGhost_.label = std::string(u8"ゴースト: ") + (prm_->ghost ? "ON" : "OFF");
     bGhost_.style = prm_->ghost ? 2 : 0;
     bPjit_.label = std::string(u8"出力ゆらぎ: ") + (prm_->pjit ? "ON" : "OFF");

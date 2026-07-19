@@ -64,4 +64,8 @@ int thermalSitesNear(const SimParams& prm, double x, double yl, double t,
 void localWind(const SimParams& prm, double x, double yl, double h,
                double& addWind, double& addXwind, double& addVz);
 
+// 基本風の高度勾配と地形風を統合した水平風。地上・空中・解析で共有する。
+void horizontalWindAt(const SimParams& prm, double x, double yl, double h,
+                      double& wind, double& xwind);
+
 } // namespace bm

@@ -602,6 +602,20 @@ void localWind(const SimParams& prm, double x, double yl, double h,
     }
 }
 
+void horizontalWindAt(const SimParams& prm, double x, double yl, double h,
+                      double& wind, double& xwind) {
+    // 中立成層のべき乗則。10m基準の観測風を地表まで連続させる。
+    const double shear = std::pow(clamp((h + 0.5) / 10.5, 0.05, 6.0), 0.14);
+    wind = prm.wind * shear;
+    xwind = prm.xwind * shear;
+    if (prm.terrainWind) {
+        double addWind = 0, addXwind = 0, addVz = 0;
+        localWind(prm, x, yl, h, addWind, addXwind, addVz);
+        wind += addWind;
+        xwind += addXwind;
+    }
+}
+
 std::string windLabel(const SimParams& prm, double psi) {
     // 風は世界固定(コース軸のwind/xwind)。機首方位psiに対する相対の「風が吹いてくる向き」を
     // 求める(機体が向きを変えれば向かい風⇔追い風も変わる)。風向計drawWindArrowと同じ計算

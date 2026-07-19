@@ -110,7 +110,9 @@ int Game::run() {
     cb.onSite = [this](const std::string& s) { r3d_.setSite(s); placeForMode(); };
     cb.soundOn = [this] { return audio_.enabled(); };
     cb.onToggleSound = [this] { audio_.setEnabled(!audio_.enabled()); };
-    cb.locked = [this] { return contestActive_; };
+    // 空力定数・気象乱数列を飛行途中で変えない。出力/再生速度など安全な項目は
+    // SettingsPanel側で個別に許可する。
+    cb.locked = [this] { return simActive_; };
     settings_.build(&prm_, &st_, [this]() -> const Analysis* { return &an_; }, cb);
 
     // デバッグ/検証用: 環境変数で起動時のサイト・モードを指定できる
@@ -259,7 +261,7 @@ int Game::run() {
 }
 
 void Game::rebuildAircraft() {
-    an_ = analyze(st_);
+    an_ = analyze(st_, &prm_);
     r3d_.buildAircraft(st_, an_);
 }
 
@@ -332,6 +334,8 @@ void Game::startSim() {
     // ライバルはbuildRivalsでこの状態をコピーし、同じ気象系列を受ける。
     const unsigned weatherSeed = (unsigned)(frand() * 4294967295.0);
     resetWeatherState(prm_, weatherSeed, true);
+    // 発進時の気温・脚・駆動系を反映した解析値と実飛行定数を同じ入力から作る。
+    rebuildAircraft();
     // お遊び機は滑走路専用 → 富士川へ強制(琵琶湖に滑走路は無い)
     if (prm_.funPlane && prm_.site != "fujikawa") {
         prm_.site = "fujikawa";
@@ -401,6 +405,11 @@ void Game::stopSim() {
     }
     r3d_.clearFx();
     simActive_ = false;
+    if (!inStartSim_) {
+        prm_.atmosphereLocked = false;
+        prm_.launchTemp = prm_.temp;
+        rebuildAircraft();
+    }
     trail_.clear();
     ghostShow_ = false;
     if (appMode_ == "flight") placeForMode();
@@ -757,9 +766,10 @@ void Game::buildRivals() {
         rst.rootDia = s.rootDia;
         r.prm = prm_;
         r.prm.auto_ = true;               // ライバルはオート操縦
-        r.prm.pjit = false;
+        // 機体設計とオート操縦以外の環境/物理条件はプレイヤーと同一。
+        r.prm.pjit = prm_.pjit;
         r.prm.sens = 1.0;
-        r.c = aeroPack(rst, analyze(rst), r.prm);
+        r.c = aeroPack(rst, analyze(rst, &r.prm), r.prm);
         r.L = makeInitialState(r.c, r.prm, 0);
         r.L.yl = s.ylOff;                 // 横に並んで発進
         rivals_.push_back(std::move(r));
@@ -775,7 +785,8 @@ void Game::stepRivals() {
         while (r.L.acc >= 0.02 && guard++ < 480 && !r.L.done) {
             r.L.acc -= 0.02;
             updateWeatherJitter(r.prm, true, 0.02);
-            stepSim(r.L, r.c, r.prm, 0.02);
+            if (r.prm.sixdof) stepSim6(r.L, r.c, r.prm, 0.02);
+            else stepSim(r.L, r.c, r.prm, 0.02);
         }
     }
 }
