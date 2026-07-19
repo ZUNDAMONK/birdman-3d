@@ -167,6 +167,96 @@ int main() {
           && near(nanAeroFallback.Cnb, c.Cnb, 1e-12),
           "non-finite aero layout fields fall back even when marked valid");
 
+    // ---- Phase 0C-3: 固有設計を構造強度・たわみ・抗力へ接続 ----
+    const DesignPhysicsProperties standardDesign = aggregateDesignPhysics(standardLayout);
+    const AircraftConstants sameDesign = aeroPackCustomDesign(
+        st, a, prm, referenceMass, referenceMass, standardAero, standardDesign);
+    check(near(sameDesign.CD0, c.CD0, 1e-12) && near(sameDesign.nFail, c.nFail, 1e-12)
+          && near(sameDesign.VNE, c.VNE, 1e-12)
+          && near(sameDesign.dihBend, c.dihBend, 1e-12),
+          "default part design preserves legacy drag and structure constants");
+
+    AirframeGraph boxSpar = standardLayout;
+    Part wingPart = *boxSpar.find("wing.main");
+    wingPart.design.spar = SparDesign{2, 0.30, st.rootDia, st.tipDia,
+                                      std::max(0, st.segments - 1), "box"};
+    check(boxSpar.replacePart("wing.main", wingPart), "physics fixture sets twin box spars");
+    const AircraftConstants boxC = aeroPackCustomDesign(
+        st, a, prm, referenceMass, referenceMass, standardAero,
+        aggregateDesignPhysics(boxSpar));
+    check(boxC.nFail > c.nFail * 2.0 && std::abs(boxC.dihBend) < std::abs(c.dihBend) * 0.5
+          && boxC.VNE > c.VNE,
+          "multiple box spars increase strength and torsional speed while reducing flex");
+
+    AirframeGraph iSpar = standardLayout;
+    wingPart = *iSpar.find("wing.main");
+    wingPart.design.spar = SparDesign{1, 0.30, st.rootDia, st.tipDia,
+                                      std::max(0, st.segments - 1), "i-beam"};
+    check(iSpar.replacePart("wing.main", wingPart), "physics fixture sets I-beam spar");
+    const AircraftConstants iC = aeroPackCustomDesign(
+        st, a, prm, referenceMass, referenceMass, standardAero,
+        aggregateDesignPhysics(iSpar));
+    check(iC.nFail > c.nFail && iC.VNE < c.VNE,
+          "I-beam improves bending strength but reduces torsional VNE");
+
+    AirframeGraph jointed = standardLayout;
+    wingPart = *jointed.find("wing.main");
+    wingPart.design.spar->jointCount = 8;
+    check(jointed.replacePart("wing.main", wingPart), "physics fixture adds spar joints");
+    const AircraftConstants jointedC = aeroPackCustomDesign(
+        st, a, prm, referenceMass, referenceMass, standardAero,
+        aggregateDesignPhysics(jointed));
+    check(jointedC.nFail <= c.nFail,
+          "additional spar joints do not improve structural safety factor");
+
+    AircraftParams fairedSt = st;
+    fairedSt.fairing = true;
+    const Analysis fairedA = analyze(fairedSt);
+    const AirframeGraph fairedLayout = buildDefaultLayout(fairedSt, fairedA);
+    const MassBreakdown fairedMass = aggregateMass(fairedLayout);
+    const AircraftConstants fairedLegacy = aeroPack(fairedSt, fairedA, prm);
+    const AircraftConstants fairedSame = aeroPackCustomDesign(
+        fairedSt, fairedA, prm, fairedMass, fairedMass,
+        aggregateAeroLayout(fairedLayout), aggregateDesignPhysics(fairedLayout));
+    check(near(fairedSame.CD0, fairedLegacy.CD0, 1e-12),
+          "default fairing shape preserves legacy CD0 reduction");
+    AirframeGraph slenderFairing = fairedLayout;
+    Part fairingPart = *slenderFairing.find("fairing");
+    fairingPart.design.fairing = FairingDesign{3.2, 0.60, 1.05, 0.25, 0.55};
+    check(slenderFairing.replacePart("fairing", fairingPart), "physics fixture sets slender fairing");
+    const AircraftConstants slenderC = aeroPackCustomDesign(
+        fairedSt, fairedA, prm, fairedMass, fairedMass,
+        aggregateAeroLayout(slenderFairing), aggregateDesignPhysics(slenderFairing));
+    check(slenderC.CD0 < fairedSame.CD0,
+          "slender smooth fairing reduces parasite drag relative to default");
+
+    AirframeGraph supportedTail = standardLayout;
+    Part tailPart = *supportedTail.find("tail.h");
+    tailPart.design.tailSupport = TailSupportDesign{"strut", 2, 20.0};
+    check(supportedTail.replacePart("tail.h", tailPart), "physics fixture adds tail struts");
+    const AircraftConstants supportedC = aeroPackCustomDesign(
+        st, a, prm, referenceMass, referenceMass, standardAero,
+        aggregateDesignPhysics(supportedTail));
+    check(supportedC.CD0 > c.CD0,
+          "tail support diameter and count add parasite drag");
+
+    DesignPhysicsProperties invalidDesign = standardDesign;
+    invalidDesign.valid = true;
+    invalidDesign.supportDragAreaM2 = std::numeric_limits<double>::quiet_NaN();
+    const AircraftConstants designFallback = aeroPackCustomDesign(
+        st, a, prm, referenceMass, referenceMass, standardAero, invalidDesign);
+    check(near(designFallback.CD0, c.CD0, 1e-12)
+          && near(designFallback.nFail, c.nFail, 1e-12),
+          "non-finite design physics fields fall back to legacy constants");
+    invalidDesign = standardDesign;
+    invalidDesign.valid = true;
+    invalidDesign.spar.rootDiaMm = std::numeric_limits<double>::quiet_NaN();
+    const AircraftConstants sparFallback = aeroPackCustomDesign(
+        st, a, prm, referenceMass, referenceMass, standardAero, invalidDesign);
+    check(near(sparFallback.VNE, c.VNE, 1e-12)
+          && near(sparFallback.nFail, c.nFail, 1e-12),
+          "non-finite spar fields fall back even when marked valid");
+
     // ---- computePolar ----
     PolarResult pol = computePolar(st, a, prm);
     std::printf("[polar] Vs=%.3f  minP=%.1fW @%.1fm/s  L/Dmax=%.2f @%.1fm/s  Dp=%.2fN Di=%.2fN\n\n",

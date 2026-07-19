@@ -560,6 +560,36 @@ void aeroLayoutTests() {
           "horizontal fin has negligible vertical-tail projection");
 }
 
+void designPhysicsTests() {
+    bm::AircraftParams st;
+    const bm::Analysis an = bm::analyze(st);
+    const bm::AirframeGraph standard = bm::buildDefaultLayout(st, an);
+    const bm::DesignPhysicsProperties base = bm::aggregateDesignPhysics(standard);
+    check(base.valid && base.spar.count == 1 && base.spar.section == "tube",
+          "default part physics exposes legacy spar");
+    check(near(base.fairingCdReduction, 0.0) && near(base.supportDragAreaM2, 0.0),
+          "unfaired cantilever default adds no custom parasite correction");
+
+    bm::AircraftParams fairedSt = st;
+    fairedSt.fairing = true;
+    bm::AirframeGraph faired = bm::buildDefaultLayout(fairedSt, bm::analyze(fairedSt));
+    const bm::DesignPhysicsProperties fairedPhysics = bm::aggregateDesignPhysics(faired);
+    check(fairedPhysics.valid && near(fairedPhysics.fairingCdReduction, 0.0012, 1e-12),
+          "default fairing reproduces legacy CD0 reduction");
+
+    bm::AirframeGraph supported = standard;
+    bm::Part htail = *supported.find("tail.h");
+    htail.design.tailSupport = bm::TailSupportDesign{"strut", 2, 20.0};
+    check(supported.replacePart("tail.h", htail), "set support design for physics aggregation");
+    const double singleArea = bm::aggregateDesignPhysics(supported).supportDragAreaM2;
+    bm::Mount hMount = supported.find("tail.h")->mount;
+    hMount.mirror = bm::MirrorMode::Pair;
+    check(supported.setMount("tail.h", hMount), "pair supported tail for drag aggregation");
+    const double pairArea = bm::aggregateDesignPhysics(supported).supportDragAreaM2;
+    check(singleArea > 0.0 && near(pairArea, 2.0 * singleArea, 1e-12),
+          "support drag area counts resolved Pair instances");
+}
+
 void designJsonV2Tests() {
     bm::AircraftParams saved;
     saved.span = 31.5;
@@ -741,6 +771,7 @@ int main() {
     defaultLayoutTests();
     aggregateMassTests();
     aeroLayoutTests();
+    designPhysicsTests();
     designJsonV2Tests();
     if (failures == 0) std::cout << "airframe_test: all checks passed\n";
     return failures == 0 ? 0 : 1;

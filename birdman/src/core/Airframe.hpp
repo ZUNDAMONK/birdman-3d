@@ -182,6 +182,16 @@ struct AeroLayoutProperties {
 // 水平尾翼は世界Y方向、垂直尾翼は世界X方向への法線投影を有効面積とする。
 AeroLayoutProperties aggregateAeroLayout(const AirframeGraph& graph);
 
+struct DesignPhysicsProperties {
+    bool valid = false;
+    SparDesign spar;
+    double fairingCdReduction = 0.0;
+    double supportDragAreaM2 = 0.0;
+};
+
+// 部品固有設計から梁解析用桁仕様と寄生抗力補正を集約する。
+DesignPhysicsProperties aggregateDesignPhysics(const AirframeGraph& graph);
+
 // 既存パラメータを真実の源として、決定的な標準機Layoutを生成する。
 AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an);
 

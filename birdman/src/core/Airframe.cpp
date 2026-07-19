@@ -522,6 +522,46 @@ AeroLayoutProperties aggregateAeroLayout(const AirframeGraph& graph) {
     return result;
 }
 
+DesignPhysicsProperties aggregateDesignPhysics(const AirframeGraph& graph) {
+    DesignPhysicsProperties result;
+    const auto placed = graph.resolve();
+    if (placed.empty()) return result;
+
+    const Part* wing = graph.find("wing.main");
+    if (!wing || !wing->design.spar) return result;
+    result.spar = *wing->design.spar;
+
+    if (const Part* fairing = graph.find("fairing")) {
+        const FairingDesign value = fairing->design.fairing.value_or(FairingDesign{});
+        const FairingDesign base;
+        const double frontal = value.widthM * value.heightM;
+        const double baseFrontal = base.widthM * base.heightM;
+        const double fineness = value.lengthM / std::sqrt(frontal);
+        const double baseFineness = base.lengthM / std::sqrt(baseFrontal);
+        const double noseQuality = std::exp(-3.0 * std::abs(value.noseRatio - base.noseRatio));
+        const double tailQuality = std::exp(-1.5 * std::abs(value.tailRatio - base.tailRatio));
+        const double shape = std::pow(fineness / baseFineness, 0.45)
+                           * std::pow(baseFrontal / frontal, 0.10)
+                           * noseQuality * tailQuality;
+        result.fairingCdReduction = 0.0012 * std::clamp(shape, 0.25, 1.50);
+    }
+
+    for (const auto& instance : placed) {
+        if (instance.part->kind != PartKind::HTail && instance.part->kind != PartKind::VTail) continue;
+        if (!instance.part->design.tailSupport) continue;
+        const TailSupportDesign& support = *instance.part->design.tailSupport;
+        if (support.mounting == "cantilever" || support.supportCount <= 0) continue;
+        const double diameterM = support.supportDiaMm / 1000.0;
+        const double lengthM = instance.part->kind == PartKind::HTail ? 0.80 : 0.65;
+        const double cd = support.mounting == "wire" ? 1.10 : 0.65;
+        result.supportDragAreaM2 += support.supportCount * diameterM * lengthM * cd;
+    }
+    result.valid = std::isfinite(result.fairingCdReduction)
+        && std::isfinite(result.supportDragAreaM2)
+        && result.fairingCdReduction >= 0.0 && result.supportDragAreaM2 >= 0.0;
+    return result;
+}
+
 AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an) {
     AirframeGraph graph;
     const double hWing = st.posture == "upright" ? 2.4 : 2.0;

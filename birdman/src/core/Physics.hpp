@@ -6,6 +6,7 @@ namespace bm {
 
 struct MassBreakdown;
 struct AeroLayoutProperties;
+struct DesignPhysicsProperties;
 
 // 乱数 [0,1) — JSのMath.random()相当
 double frand();
@@ -33,6 +34,14 @@ AircraftConstants aeroPackCustomLayout(const AircraftParams& st, const Analysis&
                                        const MassBreakdown& customMass,
                                        const MassBreakdown& referenceMass,
                                        const AeroLayoutProperties& aeroLayout);
+
+// カスタム質量・配置に加え、桁、フェアリング、尾翼支持材の固有設計を反映する。
+AircraftConstants aeroPackCustomDesign(const AircraftParams& st, const Analysis& a,
+                                       const SimParams& prm,
+                                       const MassBreakdown& customMass,
+                                       const MassBreakdown& referenceMass,
+                                       const AeroLayoutProperties& aeroLayout,
+                                       const DesignPhysicsProperties& designPhysics);
 
 // お遊びモード: 小型プロペラ機(超軽量動力機)の定数パック。
 // HPA設計解析を通さず、典型的な軽飛行機の値を直接構成する

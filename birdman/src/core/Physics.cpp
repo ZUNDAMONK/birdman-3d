@@ -214,7 +214,8 @@ static AircraftConstants aeroPackCustomImpl(const AircraftParams& st, const Anal
                                             const SimParams& prm,
                                             const MassBreakdown& customMass,
                                             const MassBreakdown& referenceMass,
-                                            const AeroLayoutProperties* aeroLayout) {
+                                            const AeroLayoutProperties* aeroLayout,
+                                            const DesignPhysicsProperties* designPhysics) {
     // 従来値を先に確保する。集約値が壊れていても飛行物理へ NaN/Inf を渡さない。
     const AircraftConstants legacy = aeroPack(st, a, prm);
     const auto finitePositive = [](double value) {
@@ -237,7 +238,25 @@ static AircraftConstants aeroPackCustomImpl(const AircraftParams& st, const Anal
         && std::isfinite(aeroLayout->hAreaScale) && aeroLayout->hAreaScale >= 0.0
         && std::isfinite(aeroLayout->vTailZ)
         && std::isfinite(aeroLayout->vAreaScale) && aeroLayout->vAreaScale >= 0.0);
-    if (!valid || !aeroValid
+    const bool sparSectionValid = !designPhysics
+        || designPhysics->spar.section == "tube"
+        || designPhysics->spar.section == "box"
+        || designPhysics->spar.section == "i-beam";
+    const bool designValid = !designPhysics || (designPhysics->valid
+        && designPhysics->spar.count >= 1 && designPhysics->spar.count <= 4
+        && std::isfinite(designPhysics->spar.chordFrac)
+        && designPhysics->spar.chordFrac >= 0.1 && designPhysics->spar.chordFrac <= 0.8
+        && std::isfinite(designPhysics->spar.rootDiaMm)
+        && designPhysics->spar.rootDiaMm >= 20.0 && designPhysics->spar.rootDiaMm <= 300.0
+        && std::isfinite(designPhysics->spar.tipDiaMm)
+        && designPhysics->spar.tipDiaMm >= 10.0 && designPhysics->spar.tipDiaMm <= 300.0
+        && designPhysics->spar.jointCount >= 0 && designPhysics->spar.jointCount <= 12
+        && sparSectionValid
+        && std::isfinite(designPhysics->fairingCdReduction)
+        && designPhysics->fairingCdReduction >= 0.0
+        && std::isfinite(designPhysics->supportDragAreaM2)
+        && designPhysics->supportDragAreaM2 >= 0.0);
+    if (!valid || !aeroValid || !designValid
         || !finitePositive(a.W) || !finitePositive(a.MAC)
         || !finitePositive(a.S) || !finitePositive(st.span)) return legacy;
 
@@ -256,6 +275,33 @@ static AircraftConstants aeroPackCustomImpl(const AircraftParams& st, const Anal
         adjusted.Sv = a.Sv * std::max(0.0, aeroLayout->vAreaScale);
         adjustedSt.incidence = aeroLayout->wingIncidenceDeg;
     }
+    if (designPhysics) {
+        adjustedSt.rootDia = designPhysics->spar.rootDiaMm;
+        adjustedSt.tipDia = designPhysics->spar.tipDiaMm;
+        adjustedSt.segments = designPhysics->spar.jointCount + 1;
+        // カスタム経路ではグラフ上のフェアリングを真実の源とし、固定補正を置換する。
+        adjustedSt.fairing = false;
+        adjustedSt.cd0Add += designPhysics->supportDragAreaM2 / adjusted.S
+                           - designPhysics->fairingCdReduction;
+        double wingKg = 0.0;
+        for (const auto& item : customMass.items)
+            if (item.partId == "wing.main") wingKg += item.kg;
+        if (wingKg > 0.0 && !adjusted.items.empty()) adjusted.items[0].w = wingKg;
+
+        LoadsResult loads = computeLoads(adjustedSt, adjusted, 1.0);
+        const double bendingSection = designPhysics->spar.section == "box" ? 1.10
+                                    : designPhysics->spar.section == "i-beam" ? 1.15 : 1.0;
+        const double bendingScale = designPhysics->spar.count * bendingSection;
+        loads.SF *= bendingScale;
+        loads.Mallow *= bendingScale;
+        loads.tip /= bendingScale;
+        loads.bendDih /= bendingScale;
+        for (double& value : loads.defl) value /= bendingScale;
+        adjusted.sparSF = loads.SF;
+        adjusted.failStation = loads.failStation;
+        adjusted.failMode = loads.failMode;
+        adjusted.bendDih = loads.bendDih;
+    }
     adjusted.lh = adjusted.xHT - adjusted.xCG;
     adjusted.Vh = adjusted.Sh * adjusted.lh / (adjusted.S * adjusted.MAC);
     adjusted.Vv = adjusted.Sv * (adjusted.xVT - adjusted.xCG) / (adjusted.S * st.span);
@@ -265,6 +311,15 @@ static AircraftConstants aeroPackCustomImpl(const AircraftParams& st, const Anal
     adjusted.V = a.V * std::sqrt(massRatio);
 
     AircraftConstants result = aeroPack(adjustedSt, adjusted, prm);
+    if (designPhysics) {
+        const double torsionSection = designPhysics->spar.section == "box" ? 1.25
+                                    : designPhysics->spar.section == "i-beam" ? 0.35 : 1.0;
+        const double armRatio = std::max(0.5,
+            std::abs(designPhysics->spar.chordFrac - 0.25) / 0.05);
+        const double torsionScale = designPhysics->spar.count * torsionSection / armRatio;
+        result.VNE = clamp(result.VNE * std::sqrt(torsionScale),
+                           1.25 * adjusted.V, 34.0);
+    }
     // Airframe: X=左右, Y=上下, Z=後方。
     // 6DOF: Ixx=ロール(前後軸), Iyy=ピッチ(左右軸), Izz=ヨー(上下軸)。
     // 質点グラフに未収録の翼・胴体分布慣性は legacy に残し、配置差分だけを加える。
@@ -281,7 +336,7 @@ AircraftConstants aeroPackCustomMass(const AircraftParams& st, const Analysis& a
                                      const SimParams& prm,
                                      const MassBreakdown& customMass,
                                      const MassBreakdown& referenceMass) {
-    return aeroPackCustomImpl(st, a, prm, customMass, referenceMass, nullptr);
+    return aeroPackCustomImpl(st, a, prm, customMass, referenceMass, nullptr, nullptr);
 }
 
 AircraftConstants aeroPackCustomLayout(const AircraftParams& st, const Analysis& a,
@@ -289,7 +344,17 @@ AircraftConstants aeroPackCustomLayout(const AircraftParams& st, const Analysis&
                                        const MassBreakdown& customMass,
                                        const MassBreakdown& referenceMass,
                                        const AeroLayoutProperties& aeroLayout) {
-    return aeroPackCustomImpl(st, a, prm, customMass, referenceMass, &aeroLayout);
+    return aeroPackCustomImpl(st, a, prm, customMass, referenceMass, &aeroLayout, nullptr);
+}
+
+AircraftConstants aeroPackCustomDesign(const AircraftParams& st, const Analysis& a,
+                                       const SimParams& prm,
+                                       const MassBreakdown& customMass,
+                                       const MassBreakdown& referenceMass,
+                                       const AeroLayoutProperties& aeroLayout,
+                                       const DesignPhysicsProperties& designPhysics) {
+    return aeroPackCustomImpl(st, a, prm, customMass, referenceMass,
+                              &aeroLayout, &designPhysics);
 }
 
 AircraftConstants funPlaneConstants(const SimParams& prm) {

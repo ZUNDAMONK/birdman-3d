@@ -718,7 +718,9 @@ void Game::startSim() {
         const MassBreakdown customMass = aggregateMass(graph_);
         const MassBreakdown referenceMass = aggregateMass(buildDefaultLayout(st_, an_));
         const AeroLayoutProperties aeroLayout = aggregateAeroLayout(graph_);
-        liveC_ = aeroPackCustomLayout(st_, an_, prm_, customMass, referenceMass, aeroLayout);
+        const DesignPhysicsProperties designPhysics = aggregateDesignPhysics(graph_);
+        liveC_ = aeroPackCustomDesign(st_, an_, prm_, customMass, referenceMass,
+                                      aeroLayout, designPhysics);
     } else {
         liveC_ = aeroPack(st_, an_, prm_);
     }
