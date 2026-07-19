@@ -264,6 +264,7 @@ const Part* AirframeGraph::find(const std::string& id) const {
 std::vector<AirframeGraph::ValidationError> AirframeGraph::validate() const {
     std::vector<ValidationError> errors = ingestErrors_;
     std::size_t roots = 0;
+    std::set<int> analysisItems;
     for (const auto& entry : parts_) {
         const Part& part = entry.second;
         if (part.mount.parentId.empty()) {
@@ -291,6 +292,8 @@ std::vector<AirframeGraph::ValidationError> AirframeGraph::validate() const {
                 finiteInertia = finiteInertia && std::isfinite(mass.I0[c][r]);
             if (!std::isfinite(mass.kg) || mass.kg < 0.0 || !finiteVec(mass.cgLocal) || !finiteInertia)
                 errors.push_back({part.id, "invalid mass node"});
+            if (mass.analysisItem >= 0 && !analysisItems.insert(mass.analysisItem).second)
+                errors.push_back({part.id, "duplicate analysis mass item"});
         }
     }
     if (roots != 1) errors.push_back({"", "graph must have exactly one root"});
