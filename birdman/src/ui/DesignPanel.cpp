@@ -641,7 +641,7 @@ void DesignPanel::draw(sf::RenderTarget& rt, const sf::Font& font, float W, floa
                 componentButtons_[i].draw(rt, font, alphaMul);
         }
         y += 36;
-        drawText(rt, font, u8"配置・重量は飛行物理へ反映（構造・抗力連成は後続）",
+        drawText(rt, font, u8"配置・重量・固有設計を飛行物理へ反映",
                  x0, y, 9, A(TEXT_DIM));
         y += 22;
     }
