@@ -507,6 +507,28 @@ void designJsonV2Tests() {
     check(roundTrip.schemaVersion == 2 && !roundTrip.layoutPresent, "v2 flat document report");
     check(bm::aircraftToJson(loaded) == encoded, "v2 flat JSON byte-stable round trip");
 
+    bm::AirframeGraph custom = bm::buildDefaultLayout(saved, bm::analyze(saved));
+    bm::Part customWing = *custom.find("wing.main");
+    customWing.mount.offset.pos = {1.25, -0.2, 0.4};
+    customWing.mount.offset.rotDeg = {12.0, -4.0, 7.0};
+    customWing.massNodes[0].I0[0][0] = 3.5;
+    customWing.massNodes[0].I0[1][2] = -0.25;
+    check(custom.replacePart("wing.main", customWing), "v3 custom fixture edit");
+    const std::string customJson = bm::aircraftToJson(saved, &custom);
+    bm::AircraftParams customParams;
+    bm::AirframeGraph customLoaded;
+    const bm::AircraftJsonReport customReport = bm::aircraftFromJson(customJson, customParams, &customLoaded);
+    check(customReport.schemaVersion == 3 && customReport.layoutPresent && customReport.layoutAccepted,
+          "v3 custom layout is accepted");
+    const bm::Part* loadedWing = customLoaded.find("wing.main");
+    check(loadedWing && near(loadedWing->mount.offset.pos, customWing.mount.offset.pos)
+          && near(loadedWing->mount.offset.rotDeg, customWing.mount.offset.rotDeg),
+          "v3 mount transform round trip");
+    check(loadedWing && loadedWing->massNodes.size() == customWing.massNodes.size()
+          && near(loadedWing->massNodes[0].I0[0][0], 3.5)
+          && near(loadedWing->massNodes[0].I0[1][2], -0.25), "v3 mass inertia round trip");
+    check(bm::aircraftToJson(customParams, &customLoaded) == customJson, "v3 JSON byte-stable round trip");
+
     const std::string validLayout = R"({
       "schemaVersion":2,"span":30,
       "layout":{"units":{"length":"m","angle":"deg","mass":"kg"},"parts":[
@@ -599,6 +621,17 @@ void designJsonV2Tests() {
               && near(fromFile.SM, expected.SM, 1e-12) && near(fromFile.Preq, expected.Preq, 1e-12),
               "legacy designs.json W/xCG/SM/Preq remains unchanged");
     }
+
+    const std::string customPath = "airframe_v3_designs_test.json";
+    bm::DesignEntry customEntry;
+    customEntry.name = "custom";
+    customEntry.st = saved;
+    customEntry.layout = custom;
+    bm::saveDesigns({customEntry}, customPath);
+    const auto customDesigns = bm::loadDesigns(customPath);
+    std::remove(customPath.c_str());
+    check(customDesigns.size() == 1 && customDesigns[0].layout.has_value()
+          && customDesigns[0].layout->find("wing.main"), "design list preserves v3 custom layout");
 }
 
 } // namespace
