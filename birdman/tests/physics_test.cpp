@@ -669,7 +669,10 @@ int main() {
             std::printf("      hdg=0  : psi=%+.2f V0=%.2f (pushV=%.1f, 海風=向かい風)\n",
                         L0.psi, L0.V, pf.pushV);
             check(std::abs(L0.psi) < 1e-9, "free start: default heading 0 (backward compatible)");
-            check(near(L0.V, pf.pushV + 2.0, 1e-9), "free start: hdg=0 into sea breeze -> headwind boosts airspeed");
+            double sw0 = 0, sx0 = 0;
+            horizontalWindAt(pf, 0, 0, 0, sw0, sx0);
+            check(near(L0.V, std::abs(pf.pushV - sw0), 1e-9),
+                  "free start: hdg=0 uses the shared surface-wind sample");
         }
         // ケース2: hdg=180(北向き=逆走) → 追い風で初期対気速度 = pushV-2、北(x減)へ滑走
         {
@@ -679,7 +682,11 @@ int main() {
             const double x0 = L1.x;
             std::printf("      hdg=180: psi=%+.2f V0=%.2f (海風=追い風)\n", L1.psi, L1.V);
             check(near(std::abs(L1.psi), PI_T, 1e-6), "free start: hdg=180 sets psi=pi");
-            check(near(L1.V, p1.pushV - 2.0, 1e-9), "free start: hdg=180 -> tailwind reduces airspeed");
+            double sw1 = 0, sx1 = 0;
+            horizontalWindAt(p1, 0, 0, 0, sw1, sx1);
+            const double along1 = sw1 * std::cos(L1.psi) + sx1 * std::sin(L1.psi);
+            check(near(L1.V, std::abs(p1.pushV - along1), 1e-9),
+                  "free start: hdg=180 uses the same surface-wind sign convention");
             FlightState Lr = L1;
             for (int i = 0; i < 250 && Lr.ground && !Lr.done; i++) stepSim(Lr, c1, p1, 0.02);
             std::printf("      hdg=180 roll 5s: dx=%+.1f dyl=%+.1f rollDist=%.1f\n",
@@ -1300,6 +1307,63 @@ int main() {
         for (int i = 0; i < 250 && !recover.done; i++) stepSim6(recover, cn, assistOn, 0.02);
         check(recover.n >= 0.7 && recover.n <= 1.3,
               "phase4: assisted negative stall recovers to 0.7-1.3G within 5 seconds");
+    }
+
+    // ---- Phase 5: 地上風・解析値の実飛行整合 ----
+    {
+        std::printf("\n[phase5 environment consistency]\n");
+        SimParams surface = prm;
+        surface.site = "fujikawa"; surface.mode = "runway";
+        surface.terrainWind = false; surface.wind = 3.0; surface.xwind = 0;
+        surface.pushV = 5.0; surface.P = 0; surface.startHdg = 0;
+        double w0 = 0, xw0 = 0, w1 = 0, xw1 = 0;
+        horizontalWindAt(surface, 0, 0, 0, w0, xw0);
+        horizontalWindAt(surface, 0, 0, 0.02, w1, xw1);
+        check(std::abs(w1 - w0) < 0.05 && near(xw0, xw1, 1e-12),
+              "phase5: surface-to-air wind profile is continuous");
+
+        SimParams tail = surface; tail.wind = 12.0; tail.pushV = 4.0;
+        AircraftConstants ct = aeroPack(st, a, tail);
+        FlightState lt = makeInitialState(ct, tail, 0);
+        check(near(lt.groundSpeed, tail.pushV, 1e-12),
+              "phase5: a tailwind stronger than push speed does not change the commanded ground start");
+        stepSim(lt, ct, tail, 0.02);
+        check(lt.groundSpeed < tail.pushV + 0.1,
+              "phase5: strong tailwind produces force, not an instantaneous ground-speed jump");
+
+        SimParams cold = prm, hot = prm;
+        cold.temp = cold.launchTemp = 0; hot.temp = hot.launchTemp = 35;
+        const PolarResult pcold = computePolar(st, a, cold);
+        const PolarResult phot = computePolar(st, a, hot);
+        check(phot.Vs > pcold.Vs, "phase5: polar uses flight air density (hot air raises stall speed)");
+        check(analyze(st, &hot).V > analyze(st, &cold).V,
+              "phase5: summary analysis uses the same atmospheric density");
+
+        AircraftParams geared = st, clean = st;
+        geared.gear = "tri"; clean.gear = "none";
+        const PolarResult pg = computePolar(geared, analyze(geared), prm);
+        const PolarResult pn = computePolar(clean, analyze(clean), prm);
+        check(pg.Dp > pn.Dp, "phase5: polar profile drag includes landing gear");
+
+        AircraftParams efficient = st, lossy = st;
+        efficient.driveEffPct = 100; lossy.driveEffPct = 60;
+        const PolarResult pe = computePolar(efficient, analyze(efficient), prm);
+        const PolarResult pl = computePolar(lossy, analyze(lossy), prm);
+        check(pl.mpY > pe.mpY * 1.5, "phase5: polar required pilot power includes drivetrain efficiency");
+        check(analyze(lossy, &prm).Preq > analyze(efficient, &prm).Preq * 1.5,
+              "phase5: summary required power includes drivetrain efficiency");
+
+        SimParams north = surface, south = surface;
+        north.startHdg = 0; south.startHdg = 180;
+        const GustResult gn = gustCalc(st, a, north);
+        const GustResult gs = gustCalc(st, a, south);
+        check(gs.launchVa > gn.launchVa,
+              "phase5: Fujikawa launch analysis uses pushV, heading and surface wind");
+
+        SimParams locked = hot;
+        locked.atmosphereLocked = true; locked.launchTemp = 12; locked.temp = 35;
+        check(near(airDensity(locked), airDensity([] { SimParams p; p.temp = 12; return p; }()), 1e-12),
+              "phase5: in-flight analysis displays launch-locked atmospheric density");
     }
 
     // ---- 破壊テスト: 桁の弱い機体は高G旋回で折れる ----

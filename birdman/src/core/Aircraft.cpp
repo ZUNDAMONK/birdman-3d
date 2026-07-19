@@ -1,5 +1,6 @@
 #include "core/Aircraft.hpp"
 #include "core/Material.hpp"
+#include "core/Weather.hpp"
 #include <cmath>
 #include <algorithm>
 #include <cstdio>
@@ -11,6 +12,22 @@ double lerp(double a, double b, double t) { return a + (b - a) * t; }
 double clamp(double v, double lo, double hi) { return std::max(lo, std::min(hi, v)); }
 
 static const double PI = 3.14159265358979323846;
+
+double airDensity(const SimParams& prm) {
+    const double temp = (prm.atmosphereLocked ? prm.launchTemp : prm.temp) + 273.15;
+    const double pressure = 101325 * std::pow(1 - 2.25577e-5 * 86, 5.2559);
+    return pressure / (287.05 * temp);
+}
+
+double gearDragCoefficient(const AircraftParams& st) {
+    if (st.gear == "none") return 0.0;
+    return st.gear == "tri" ? 0.0016 : st.gear == "tandem" ? 0.0007 : 0.0009;
+}
+
+double propInstallationEfficiency(const AircraftParams& st) {
+    return st.propConfig == "pylon" ? 1.0 : st.propConfig == "midboom" ? 0.97
+         : st.propConfig == "pusher" ? 0.92 : 0.96;
+}
 
 double chordAt(const AircraftParams& p, double t) {
     if (p.planform == "rect") return p.rootChord;
@@ -78,8 +95,8 @@ WingGeom wingGeom(const AircraftParams& p) {
     return {S, c2 / S, p.span * p.span / S};
 }
 
-Analysis analyze(const AircraftParams& st) {
-    const double g = 9.81, rho = 1.225;
+Analysis analyze(const AircraftParams& st, const SimParams* prm) {
+    const double g = 9.81, rho = prm ? airDensity(*prm) : 1.225;
     WingGeom wgm = wingGeom(st);
     const double S = wgm.S, MAC = wgm.MAC, AR = wgm.AR;
     const double half = st.span / 2;
@@ -153,17 +170,17 @@ Analysis analyze(const AircraftParams& st) {
     const double xNP = xAC + MAC * Vh * tailEff * 0.72;
     const double SM = (xNP - xCG) / MAC * 100;
     const double CL = 1.0, V = std::sqrt(2 * W / (rho * S * CL));
-    const double CD0 = 0.014 + st.cd0Add + (st.propConfig == "pylon" ? 0.0015 : 0.0)
-                     + (st.ailMode != "none" ? 0.0008 : 0.0) + (st.fairing ? -0.0012 : 0.0);
+    const AeroConsts ac = aeroConsts(st);
+    const double CD0 = ac.CD0 + gearDragCoefficient(st);
     // スパン効率: 揚力線理論(平面形・ねじり反映)+胴体/粘性補正0.95
-    const double e = clamp(computeLLT(st, 1.0).e * 0.95, 0.6, 0.97);
+    const double e = ac.e;
     const double CDi = CL * CL / (PI * AR * e);
     const double D = 0.5 * rho * V * V * S * (CD0 + CDi);
     // 必要軸出力: BEMTで推力=抗力となるパワー(プロペラ設計が直接効く)
     const PropTables& pt = computeBEMT(st);
-    const double inst = st.propConfig == "pylon" ? 1.0 : st.propConfig == "midboom" ? 0.97
-                      : st.propConfig == "pusher" ? 0.92 : 0.96;
-    const double Preq = propPowerFor(pt.J, pt.Ct, pt.Cp, st.propDia, rho, V, D, inst);
+    const double inst = propInstallationEfficiency(st);
+    const double driveEff = clamp(st.driveEffPct / 100.0, 0.5, 1.0);
+    const double Preq = propPowerFor(pt.J, pt.Ct, pt.Cp, st.propDia, rho, V, D, inst) / driveEff;
     const double margin = st.powerMax - Preq;
     a.S = S; a.MAC = MAC; a.AR = AR; a.Sh = Sh; a.Sv = Sv;
     a.wEmpty = wEmpty; a.W = W / g;
@@ -545,7 +562,7 @@ double propPowerFor(const std::vector<double>& J, const std::vector<double>& Ct,
 }
 
 PolarResult computePolar(const AircraftParams& st, const Analysis& a, const SimParams& prm) {
-    const double rho = 1.225, g = 9.81, W = a.W * g;
+    const double rho = airDensity(prm), g = 9.81, W = a.W * g;
     AeroConsts ac = aeroConsts(st);
     const double CLmax = std::min(prm.CLmax, ac.CLmaxWing);
     const double Vs = std::sqrt(2 * W / (rho * a.S * CLmax));
@@ -553,18 +570,19 @@ PolarResult computePolar(const AircraftParams& st, const Analysis& a, const SimP
     r.Vs = Vs;
     bool first = true;
     const PropTables& pt = computeBEMT(st);
-    const double inst = st.propConfig == "pylon" ? 1.0 : st.propConfig == "midboom" ? 0.97
-                      : st.propConfig == "pusher" ? 0.92 : 0.96;
+    const double inst = propInstallationEfficiency(st);
+    const double driveEff = clamp(st.driveEffPct / 100.0, 0.5, 1.0);
     const AirfoilData& af = airfoilOf(st);
     const double cd0D = afCd0AtRe(af, rho * a.V * a.MAC / 1.81e-5);
     for (double V = Vs; V <= 15; V += 0.1) {
         const double CL = 2 * W / (rho * V * V * a.S);
         // 断面抗力はその速度のReで評価(低速側で「Reの壁」が立ち上がる)
         const double dProf = afCd0AtRe(af, rho * V * a.MAC / 1.81e-5) - cd0D;
-        const double CD = ac.CD0 + dProf + CL * CL / (PI * a.AR * ac.e);
+        const double CD = ac.CD0 + gearDragCoefficient(st) + dProf
+                        + CL * CL / (PI * a.AR * ac.e);
         // 必要軸出力: BEMTで推力=抗力となるパワーを解く(釣鐘近似を廃止)
         const double drag = 0.5 * rho * V * V * a.S * CD;
-        const double P = propPowerFor(pt.J, pt.Ct, pt.Cp, st.propDia, rho, V, drag, inst);
+        const double P = propPowerFor(pt.J, pt.Ct, pt.Cp, st.propDia, rho, V, drag, inst) / driveEff;
         const double LD = CL / CD;
         r.pP.push_back({V, P});
         r.pLD.push_back({V, LD});
@@ -573,24 +591,32 @@ PolarResult computePolar(const AircraftParams& st, const Analysis& a, const SimP
         first = false;
     }
     const double Vc = a.V;
-    r.Dp = 0.5 * rho * Vc * Vc * a.S * ac.CD0;
+    r.Dp = 0.5 * rho * Vc * Vc * a.S * (ac.CD0 + gearDragCoefficient(st));
     r.Di = 0.5 * rho * Vc * Vc * a.S * (1 / (PI * a.AR * ac.e));
     return r;
 }
 
 GustResult gustCalc(const AircraftParams& st, const Analysis& a, const SimParams& prm) {
-    const double rho = 1.225, g = 9.81, W = a.W * g;
+    const double rho = airDensity(prm), g = 9.81, W = a.W * g;
     AeroConsts ac = aeroConsts(st);
     const double Vs = std::sqrt(2 * W / (rho * a.S * std::min(prm.CLmax, ac.CLmaxWing)));
     const double V = a.V;
     const double slope = 2 * PI * a.AR / (a.AR + 2);
     const double dA = std::atan2(prm.gust, V);
     const double n = 1 + 0.5 * rho * V * V * a.S * slope * dA / W;
-    // デッキ滑走(10m・下り3.5°)の重力加速込みの前縁飛び出し速度で発進可否を判定
-    // (推力・抗力は相殺想定の保守見積り)
-    const double pushVa = prm.V0 - prm.wind;
-    const double launchVa = std::sqrt(std::max(0.0, pushVa * std::abs(pushVa)
-                                       + 2 * 9.81 * std::sin(3.5 * PI / 180) * 10));
+    double launchVa;
+    if (prm.site == "fujikawa" || prm.mode == "runway") {
+        const double psi = prm.startHdg * PI / 180;
+        double wind = 0, xwind = 0;
+        horizontalWindAt(prm, 0, 0, 0, wind, xwind);
+        const double along = wind * std::cos(psi) + xwind * std::sin(psi);
+        launchVa = std::max(0.0, prm.pushV - along);
+    } else {
+        // 琵琶湖は10m・下り3.5°のプラットフォーム式。
+        const double pushVa = prm.V0 - prm.wind;
+        launchVa = std::sqrt(std::max(0.0, pushVa * std::abs(pushVa)
+                              + 2 * 9.81 * std::sin(3.5 * PI / 180) * 10));
+    }
     return {Vs, V, (V - Vs) / Vs * 100, launchVa, launchVa >= Vs * 1.05,
             dA * 180 / PI, n, a.sparSF / std::max(0.01, n)};
 }

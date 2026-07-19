@@ -230,6 +230,7 @@ struct FlightState {
     // 走行・終了状態
     double groundRoll = -1;              // -1 = 未離陸(JSのnull)
     double rollDist = 0;                 // 地上滑走の累積距離m(自由方位発進のoverrun判定用)
+    double groundSpeed = -1;             // 機軸方向の対地速度m/s。-1は旧状態から未初期化
     double vLat = 0;                     // クラブ着陸の残留横対地速度(接地時保存, τ≈0.6sで減衰。第6弾)
     double liftoffT = -1e9;              // 離陸瞬間の時刻(直後0.5秒のgam滑らか立ち上げ用。第6弾)
     bool   hardLanding = false;          // ハードランディング発生(UIトースト用。Game側で表示後クリア)
