@@ -14,6 +14,22 @@ namespace bm {
 
 static const double PI = 3.14159265358979323846;
 
+static const char* editablePartId(BodyPart part) {
+    switch (part) {
+        case BodyPart::Wing: return "wing.main";
+        case BodyPart::Prop: return "prop.main";
+        case BodyPart::Cockpit: return "cockpit";
+        case BodyPart::HTail: return "tail.h";
+        case BodyPart::VTail: return "tail.v";
+        default: return nullptr;
+    }
+}
+
+static bool sameMount(const Mount& a, const Mount& b) {
+    return a.parentId == b.parentId && a.hardpointId == b.hardpointId && a.mirror == b.mirror
+        && a.offset.pos == b.offset.pos && a.offset.rotDeg == b.offset.rotDeg;
+}
+
 static std::string physicsTag(bool sixdof, bool assist) {
     if (!sixdof) return u8"[標準物理/常時補助相当]";
     return std::string(u8"[拡張物理/補助") + (assist ? "ON]" : "OFF]");
@@ -86,11 +102,28 @@ int Game::run() {
     bDebriefClose_.label = u8"閉じる";
     bDebriefClose_.onClick = [this] { debriefOpen_ = false; };
 
+    DesignPanel::MountEditorCallbacks mountCallbacks;
+    mountCallbacks.get = [this](BodyPart part, Mount& out) { return getPartMount(part, out); };
+    mountCallbacks.apply = [this](BodyPart part, const Mount& mount, std::string& error) {
+        return applyPartMount(part, mount, error);
+    };
+    mountCallbacks.reset = [this](BodyPart part, std::string& error) { return resetPartMount(part, error); };
+    mountCallbacks.undo = [this] { return undoLayout(); };
+    mountCallbacks.redo = [this] { return redoLayout(); };
+    mountCallbacks.canUndo = [this] { return !layoutUndo_.empty(); };
+    mountCallbacks.canRedo = [this] { return !layoutRedo_.empty(); };
     design_.build(&st_, [this] { rebuildAircraft(); },
-                  [this]() -> const Analysis* { return &an_; });
+                  [this]() -> const Analysis* { return &an_; }, std::move(mountCallbacks));
     {
         DesignTools::Callbacks tcb;
-        tcb.onLoadDesign = [this](const AircraftParams& p) { st_ = p; rebuildAircraft(); };
+        tcb.onLoadDesign = [this](const DesignEntry& entry) {
+            st_ = entry.st;
+            layoutUndo_.clear(); layoutRedo_.clear();
+            customLayout_ = entry.layout.has_value();
+            if (entry.layout) graph_ = *entry.layout;
+            rebuildAircraft();
+        };
+        tcb.currentLayout = [this]() -> const AirframeGraph* { return customLayout_ ? &graph_ : nullptr; };
         tcb.onFlexPreview = [this](double n, bool apply) { flexPrevN_ = n; flexPrevApply_ = apply; };
         tcb.lastDist = [this] { return simRes_.dist; };
         tcb.career = &career_;
@@ -262,14 +295,76 @@ int Game::run() {
 
 void Game::rebuildAircraft() {
     an_ = analyze(st_, &prm_);
-    graph_ = buildDefaultLayout(st_, an_);
+    if (!customLayout_ || graph_.size() == 0) graph_ = buildDefaultLayout(st_, an_);
     if (!graph_.validate().empty()) {
         std::fprintf(stderr, "warning: invalid aircraft parameters; restoring the default aircraft\n");
-        st_ = AircraftParams{};
-        an_ = analyze(st_, &prm_);
+        customLayout_ = false;
+        layoutUndo_.clear(); layoutRedo_.clear();
         graph_ = buildDefaultLayout(st_, an_);
+        if (!graph_.validate().empty()) {
+            st_ = AircraftParams{};
+            an_ = analyze(st_, &prm_);
+            graph_ = buildDefaultLayout(st_, an_);
+        }
     }
     r3d_.buildAircraft(st_, an_, graph_);
+}
+
+bool Game::getPartMount(BodyPart part, Mount& out) const {
+    const char* id = editablePartId(part);
+    const Part* value = id ? graph_.find(id) : nullptr;
+    if (!value) return false;
+    out = value->mount;
+    return true;
+}
+
+void Game::installLayout(AirframeGraph next, bool custom, bool recordHistory) {
+    if (recordHistory) {
+        layoutUndo_.push_back({graph_, customLayout_});
+        if (layoutUndo_.size() > 64) layoutUndo_.erase(layoutUndo_.begin());
+        layoutRedo_.clear();
+    }
+    graph_ = std::move(next);
+    customLayout_ = custom;
+    r3d_.buildAircraft(st_, an_, graph_);
+}
+
+bool Game::applyPartMount(BodyPart part, const Mount& mount, std::string& error) {
+    const char* id = editablePartId(part);
+    const Part* current = id ? graph_.find(id) : nullptr;
+    if (!current) { error = u8"この部品は取付編集の対象外です"; return false; }
+    if (sameMount(current->mount, mount)) return true;
+    AirframeGraph candidate = graph_;
+    if (!candidate.setMount(id, mount, &error)) return false;
+    installLayout(std::move(candidate), true, true);
+    return true;
+}
+
+bool Game::resetPartMount(BodyPart part, std::string& error) {
+    const char* id = editablePartId(part);
+    if (!id) { error = u8"この部品は標準位置へ戻せません"; return false; }
+    const AirframeGraph defaults = buildDefaultLayout(st_, an_);
+    const Part* standard = defaults.find(id);
+    if (!standard) { error = u8"現在の構成に標準部品がありません"; return false; }
+    return applyPartMount(part, standard->mount, error);
+}
+
+bool Game::undoLayout() {
+    if (layoutUndo_.empty()) return false;
+    LayoutSnapshot previous = std::move(layoutUndo_.back());
+    layoutUndo_.pop_back();
+    layoutRedo_.push_back({graph_, customLayout_});
+    installLayout(std::move(previous.graph), previous.custom, false);
+    return true;
+}
+
+bool Game::redoLayout() {
+    if (layoutRedo_.empty()) return false;
+    LayoutSnapshot next = std::move(layoutRedo_.back());
+    layoutRedo_.pop_back();
+    layoutUndo_.push_back({graph_, customLayout_});
+    installLayout(std::move(next.graph), next.custom, false);
+    return true;
 }
 
 void Game::setMode(const std::string& mode) {

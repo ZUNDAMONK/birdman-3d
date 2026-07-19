@@ -3,7 +3,9 @@
 // テンプレート選択+スライダーは従来のsections_をそのまま流用し、
 // 部位ごとに関連セクションだけを表示する。カメラは別途Game側でズームする。
 #include "core/Types.hpp"
+#include "core/Airframe.hpp"
 #include "ui/Widgets.hpp"
+#include <array>
 #include <functional>
 #include <map>
 
@@ -14,9 +16,20 @@ enum class BodyPart { Wing = 0, Prop, Cockpit, HTail, VTail, TailBeam, Count };
 
 class DesignPanel {
 public:
+    struct MountEditorCallbacks {
+        std::function<bool(BodyPart, Mount&)> get;
+        std::function<bool(BodyPart, const Mount&, std::string&)> apply;
+        std::function<bool(BodyPart, std::string&)> reset;
+        std::function<bool()> undo;
+        std::function<bool()> redo;
+        std::function<bool()> canUndo;
+        std::function<bool()> canRedo;
+    };
+
     // onChange: パラメータ変更時(機体再解析・再構築)
     void build(AircraftParams* st, std::function<void()> onChange,
-               std::function<const Analysis*()> getAnalysis);
+               std::function<const Analysis*()> getAnalysis,
+               MountEditorCallbacks mountCallbacks = {});
 
     // 左ドックパネルを開く/閉じる。anchorScreenは旧ポップアップAPIの名残(未使用)
     void openFor(BodyPart part, sf::Vector2f anchorScreen, float W, float H);
@@ -47,10 +60,12 @@ private:
                     std::function<bool()> vis = nullptr);
     std::vector<int> sectionsForPart(BodyPart part) const;
     void updateDockRect(float W, float H);
+    void loadMountEditor();
 
     AircraftParams* st_ = nullptr;
     std::function<void()> onChange_;
     std::function<const Analysis*()> getAn_;
+    MountEditorCallbacks mountCb_;
     std::vector<TplGroup> groups_;
     std::vector<Section> sections_;
     std::map<std::string, std::string> tplSel_;
@@ -63,6 +78,11 @@ private:
     sf::FloatRect rect_{};                 // ポップアップ矩形(現在位置)
     float animT_ = 1.f;                    // 0=開き始め 1=完全表示(0.18秒でease-out)
     Button closeBtn_;
+    Mount pendingMount_;
+    std::array<Slider, 6> mountSliders_;
+    Button mountMirror_, mountApply_, mountCancel_, mountReset_, mountUndo_, mountRedo_;
+    bool mountEditable_ = false;
+    std::string mountMessage_;
 };
 
 } // namespace bm
