@@ -276,6 +276,13 @@ void atomicEditingTests() {
     renamed.id = "renamed";
     check(!graph.replacePart("wing", renamed), "stable part id cannot be changed");
 
+    bm::Part invalidDesign = *graph.find("wing");
+    invalidDesign.design.spar = bm::SparDesign{};
+    invalidDesign.design.spar->count = 0;
+    check(!graph.replacePart("wing", invalidDesign), "invalid part-specific design is rejected");
+    check(!graph.find("wing")->design.spar.has_value(),
+          "invalid part-specific design preserves original graph");
+
     bm::Part brokenRoot = *graph.find("body");
     brokenRoot.hardpoints.erase(brokenRoot.hardpoints.begin() + 2);
     check(!graph.replacePart("body", brokenRoot), "hardpoint used by a child cannot be removed");
@@ -535,7 +542,17 @@ void designJsonV2Tests() {
     customWing.mount.offset.rotDeg = {12.0, -4.0, 7.0};
     customWing.massNodes[0].I0[0][0] = 3.5;
     customWing.massNodes[0].I0[1][2] = -0.25;
+    customWing.design.spar = bm::SparDesign{2, 0.37, 128.0, 44.0, 5, "box"};
     check(custom.replacePart("wing.main", customWing), "v3 custom fixture edit");
+    bm::Part customFairing = *custom.find("fairing");
+    customFairing.design.fairing = bm::FairingDesign{2.65, 0.82, 1.18, 0.19, 0.71};
+    check(custom.replacePart("fairing", customFairing), "v3 fairing design fixture");
+    bm::Part customPilot = *custom.find("pilot");
+    customPilot.design.pilot = bm::PilotStationDesign{0.55, -0.95, 0.48, -0.67, 0.62};
+    check(custom.replacePart("pilot", customPilot), "v3 pilot station fixture");
+    bm::Part customTail = *custom.find("tail.v");
+    customTail.design.tailSupport = bm::TailSupportDesign{"strut", 2, 14.0};
+    check(custom.replacePart("tail.v", customTail), "v3 tail support fixture");
     const std::string customJson = bm::aircraftToJson(saved, &custom);
     bm::AircraftParams customParams;
     bm::AirframeGraph customLoaded;
@@ -549,6 +566,21 @@ void designJsonV2Tests() {
     check(loadedWing && loadedWing->massNodes.size() == customWing.massNodes.size()
           && near(loadedWing->massNodes[0].I0[0][0], 3.5)
           && near(loadedWing->massNodes[0].I0[1][2], -0.25), "v3 mass inertia round trip");
+    check(loadedWing && loadedWing->design.spar && loadedWing->design.spar->count == 2
+          && near(loadedWing->design.spar->chordFrac, 0.37)
+          && loadedWing->design.spar->section == "box", "v3 spar design round trip");
+    const bm::Part* loadedFairing = customLoaded.find("fairing");
+    const bm::Part* loadedPilot = customLoaded.find("pilot");
+    const bm::Part* loadedTail = customLoaded.find("tail.v");
+    check(loadedFairing && loadedFairing->design.fairing
+          && near(loadedFairing->design.fairing->lengthM, 2.65)
+          && near(loadedFairing->design.fairing->tailRatio, 0.71), "v3 fairing design round trip");
+    check(loadedPilot && loadedPilot->design.pilot
+          && near(loadedPilot->design.pilot->pedalZM, -0.95)
+          && near(loadedPilot->design.pilot->crankHeightM, 0.62), "v3 pilot design round trip");
+    check(loadedTail && loadedTail->design.tailSupport
+          && loadedTail->design.tailSupport->mounting == "strut"
+          && loadedTail->design.tailSupport->supportCount == 2, "v3 tail support round trip");
     check(bm::aircraftToJson(customParams, &customLoaded) == customJson, "v3 JSON byte-stable round trip");
 
     const std::string validLayout = R"({
@@ -582,7 +614,8 @@ void designJsonV2Tests() {
     const std::vector<std::string> invalidLayouts = {
         R"({"schemaVersion":2,"layout":{"parts":[{"id":"fuselage","kind":"fuselage"},{"id":"x","kind":"wing","mount":{"parent":"missing","hardpoint":"hp"}}]}})",
         R"({"schemaVersion":2,"layout":{"parts":[{"id":"fuselage","kind":"fuselage"},{"id":"fuselage","kind":"fuselage"}]}})",
-        R"({"schemaVersion":2,"layout":{"parts":[{"id":"fuselage","kind":"fuselage","hardpoints":[{"id":"hp","pos":[1001,0,0]}]}]}})"
+        R"({"schemaVersion":2,"layout":{"parts":[{"id":"fuselage","kind":"fuselage","hardpoints":[{"id":"hp","pos":[1001,0,0]}]}]}})",
+        R"({"schemaVersion":3,"layout":{"parts":[{"id":"fuselage","kind":"fuselage","design":{"spar":{"count":99}}}]}})"
     };
     for (std::size_t i = 0; i < invalidLayouts.size(); ++i) {
         bm::AircraftParams params;

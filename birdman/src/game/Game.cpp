@@ -30,6 +30,19 @@ static bool sameMount(const Mount& a, const Mount& b) {
         && a.offset.pos == b.offset.pos && a.offset.rotDeg == b.offset.rotDeg;
 }
 
+static double tailSupportMass(const TailSupportDesign& value) {
+    if (value.mounting == "cantilever" || value.supportCount <= 0) return 0.0;
+    const double reference = value.mounting == "wire" ? 5.0 : 20.0;
+    const double perSupport = value.mounting == "wire" ? 0.025 : 0.12;
+    return value.supportCount * perSupport * std::pow(value.supportDiaMm / reference, 2.0);
+}
+
+static PilotStationDesign defaultPilotStation(const AircraftParams& st) {
+    if (st.posture == "upright") return {0.68, -0.30, 0.80, -0.28, 0.42};
+    if (st.posture == "semi") return {0.62, -0.50, 0.85, -0.80, 0.58};
+    return {0.60, -0.55, 0.92, -0.95, 0.68};
+}
+
 static std::string physicsTag(bool sixdof, bool assist) {
     if (!sixdof) return u8"[標準物理/常時補助相当]";
     return std::string(u8"[拡張物理/補助") + (assist ? "ON]" : "OFF]");
@@ -119,6 +132,13 @@ int Game::run() {
     mountCallbacks.hasComponent = [this](const std::string& key) { return hasComponent(key); };
     mountCallbacks.toggleComponent = [this](const std::string& key, std::string& error) {
         return toggleComponent(key, error);
+    };
+    mountCallbacks.getDesign = [this](BodyPart part, PartDesign& out) { return getPartDesign(part, out); };
+    mountCallbacks.applyDesign = [this](BodyPart part, const PartDesign& value, std::string& error) {
+        return applyPartDesign(part, value, error);
+    };
+    mountCallbacks.estimateDesignMass = [this](BodyPart part, const PartDesign& value) {
+        return estimatePartDesignMass(part, value);
     };
     design_.build(&st_, [this] { rebuildAircraft(); },
                   [this]() -> const Analysis* { return &an_; }, std::move(mountCallbacks));
@@ -488,6 +508,8 @@ bool Game::toggleComponent(const std::string& key, std::string& error) {
                 part.mount.parentId = "fuselage";
                 part.mount.hardpointId = key == "boomwing" ? "hp.boomwing" : "hp.cockpit";
                 if (key == "boomwing") part.mount.mirror = MirrorMode::Pair;
+                if (key == "pilot") part.design.pilot = PilotStationDesign{};
+                if (key == "fairing") part.design.fairing = FairingDesign{};
                 if (!add(std::move(part))) return false;
             }
         } else {
@@ -507,6 +529,106 @@ bool Game::toggleComponent(const std::string& key, std::string& error) {
                 }
             }
         }
+    }
+    installLayout(std::move(candidate), true, true);
+    return true;
+}
+
+bool Game::getPartDesign(BodyPart part, PartDesign& out) const {
+    out = {};
+    if (part == BodyPart::Wing) {
+        const Part* value = graph_.find("wing.main");
+        if (!value) return false;
+        out.spar = value->design.spar.value_or(SparDesign{1, 0.30, st_.rootDia, st_.tipDia,
+                                                          std::max(0, st_.segments - 1), "tube"});
+        return true;
+    }
+    if (part == BodyPart::Cockpit) {
+        if (const Part* fairing = graph_.find("fairing"))
+            out.fairing = fairing->design.fairing.value_or(FairingDesign{});
+        if (const Part* pilot = graph_.find("pilot"))
+            out.pilot = pilot->design.pilot.value_or(defaultPilotStation(st_));
+        return out.fairing.has_value() || out.pilot.has_value();
+    }
+    const char* id = part == BodyPart::HTail ? "tail.h" : part == BodyPart::VTail ? "tail.v" : nullptr;
+    const Part* value = id ? graph_.find(id) : nullptr;
+    if (!value) return false;
+    out.tailSupport = value->design.tailSupport.value_or(TailSupportDesign{});
+    return true;
+}
+
+double Game::estimatePartDesignMass(BodyPart part, const PartDesign& design) const {
+    double total = 0.0;
+    if (part == BodyPart::Wing && design.spar) {
+        const SparDesign& value = *design.spar;
+        const double baseArea = std::max(1.0, 0.5 * (st_.rootDia * st_.rootDia + st_.tipDia * st_.tipDia));
+        const double area = 0.5 * (value.rootDiaMm * value.rootDiaMm + value.tipDiaMm * value.tipDiaMm);
+        const double sectionFactor = value.section == "box" ? 0.82 : value.section == "i-beam" ? 0.66 : 1.0;
+        total += an_.wSpar * value.count * area / baseArea * sectionFactor;
+        total += an_.wJoints * (value.jointCount + 1.0) / std::max(1, st_.segments);
+    }
+    if (design.fairing) {
+        const FairingDesign& value = *design.fairing;
+        const FairingDesign base;
+        const double scale = value.lengthM * (value.widthM + value.heightM)
+            / (base.lengthM * (base.widthM + base.heightM));
+        total += 1.1 * scale * (0.8 + 0.4 * value.tailRatio);
+    }
+    if (design.pilot) {
+        const PilotStationDesign& value = *design.pilot;
+        const double linkage = std::hypot(value.pedalZM - value.crankZM,
+                                          value.pedalHeightM - value.crankHeightM);
+        total += 0.22 + linkage * 0.12;
+    }
+    if (design.tailSupport) total += tailSupportMass(*design.tailSupport);
+    return total;
+}
+
+bool Game::applyPartDesign(BodyPart part, const PartDesign& design, std::string& error) {
+    AirframeGraph candidate = graph_;
+    auto setMass = [](Part& value, int analysisItem, double kg) {
+        for (auto& mass : value.massNodes) if (mass.analysisItem == analysisItem) {
+            mass.kg = std::max(0.0, kg); return;
+        }
+        MassNode node;
+        node.kg = std::max(0.0, kg); node.analysisItem = -1;
+        value.massNodes.push_back(node);
+    };
+    auto replace = [&](const char* id, const PartDesign& value, int analysisItem,
+                       double massKg, bool absoluteMass) {
+        const Part* current = candidate.find(id);
+        if (!current) { error = std::string(u8"部品がありません: ") + id; return false; }
+        Part replacement = *current;
+        replacement.design = value;
+        double target = massKg;
+        if (!absoluteMass) target += an_.items[(std::size_t)analysisItem].w;
+        setMass(replacement, analysisItem, target);
+        return candidate.replacePart(id, std::move(replacement), &error);
+    };
+
+    if (part == BodyPart::Wing && design.spar) {
+        PartDesign baseDesign;
+        baseDesign.spar = SparDesign{1, 0.30, st_.rootDia, st_.tipDia,
+                                     std::max(0, st_.segments - 1), "tube"};
+        const double delta = estimatePartDesignMass(part, design) - estimatePartDesignMass(part, baseDesign);
+        if (!replace("wing.main", design, 0, delta, false)) return false;
+    } else if (part == BodyPart::Cockpit) {
+        if (design.fairing) {
+            PartDesign value; value.fairing = design.fairing;
+            if (!replace("fairing", value, 8, estimatePartDesignMass(part, value), true)) return false;
+        }
+        if (design.pilot) {
+            PartDesign value; value.pilot = design.pilot;
+            PartDesign base; base.pilot = defaultPilotStation(st_);
+            const double delta = estimatePartDesignMass(part, value) - estimatePartDesignMass(part, base);
+            if (!replace("pilot", value, 10, delta, false)) return false;
+        }
+    } else if ((part == BodyPart::HTail || part == BodyPart::VTail) && design.tailSupport) {
+        const char* id = part == BodyPart::HTail ? "tail.h" : "tail.v";
+        const int item = part == BodyPart::HTail ? 1 : 2;
+        if (!replace(id, design, item, tailSupportMass(*design.tailSupport), false)) return false;
+    } else {
+        error = u8"この部位には固有設計がありません"; return false;
     }
     installLayout(std::move(candidate), true, true);
     return true;

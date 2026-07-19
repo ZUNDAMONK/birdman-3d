@@ -45,6 +45,11 @@ bool validTransform(const Transform3& transform) {
         && std::abs(transform.pos.z) <= kPositionLimitM;
 }
 
+bool validChoice(const std::string& value, std::initializer_list<const char*> choices) {
+    for (const char* choice : choices) if (value == choice) return true;
+    return false;
+}
+
 const Hardpoint* findHardpoint(const Part& part, const std::string& id) {
     for (const auto& hp : part.hardpoints) {
         if (hp.id == id) return &hp;
@@ -295,6 +300,42 @@ std::vector<AirframeGraph::ValidationError> AirframeGraph::validate() const {
             if (mass.analysisItem >= 0 && !analysisItems.insert(mass.analysisItem).second)
                 errors.push_back({part.id, "duplicate analysis mass item"});
         }
+        if (part.design.spar) {
+            const SparDesign& value = *part.design.spar;
+            if (part.kind != PartKind::Wing || value.count < 1 || value.count > 4
+                || !std::isfinite(value.chordFrac) || value.chordFrac < 0.1 || value.chordFrac > 0.8
+                || !std::isfinite(value.rootDiaMm) || value.rootDiaMm < 20 || value.rootDiaMm > 300
+                || !std::isfinite(value.tipDiaMm) || value.tipDiaMm < 10 || value.tipDiaMm > 300
+                || value.jointCount < 0 || value.jointCount > 12
+                || !validChoice(value.section, {"tube", "box", "i-beam"}))
+                errors.push_back({part.id, "invalid spar design"});
+        }
+        if (part.design.fairing) {
+            const FairingDesign& value = *part.design.fairing;
+            if (part.kind != PartKind::Fairing || !std::isfinite(value.lengthM) || value.lengthM < 0.5 || value.lengthM > 6
+                || !std::isfinite(value.widthM) || value.widthM < 0.25 || value.widthM > 2.5
+                || !std::isfinite(value.heightM) || value.heightM < 0.25 || value.heightM > 2.5
+                || !std::isfinite(value.noseRatio) || value.noseRatio < 0.05 || value.noseRatio > 0.45
+                || !std::isfinite(value.tailRatio) || value.tailRatio < 0.2 || value.tailRatio > 0.9)
+                errors.push_back({part.id, "invalid fairing design"});
+        }
+        if (part.design.pilot) {
+            const PilotStationDesign& value = *part.design.pilot;
+            if (part.kind != PartKind::Pilot || !std::isfinite(value.seatHeightM) || value.seatHeightM < 0.2 || value.seatHeightM > 1.8
+                || !std::isfinite(value.pedalZM) || std::abs(value.pedalZM) > 3
+                || !std::isfinite(value.pedalHeightM) || value.pedalHeightM < 0.1 || value.pedalHeightM > 1.8
+                || !std::isfinite(value.crankZM) || std::abs(value.crankZM) > 3
+                || !std::isfinite(value.crankHeightM) || value.crankHeightM < 0.1 || value.crankHeightM > 1.8)
+                errors.push_back({part.id, "invalid pilot station design"});
+        }
+        if (part.design.tailSupport) {
+            const TailSupportDesign& value = *part.design.tailSupport;
+            if ((part.kind != PartKind::HTail && part.kind != PartKind::VTail)
+                || !validChoice(value.mounting, {"cantilever", "strut", "wire"})
+                || value.supportCount < 0 || value.supportCount > 8
+                || !std::isfinite(value.supportDiaMm) || value.supportDiaMm < 2 || value.supportDiaMm > 80)
+                errors.push_back({part.id, "invalid tail support design"});
+        }
     }
     if (roots != 1) errors.push_back({"", "graph must have exactly one root"});
 
@@ -500,6 +541,8 @@ AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an) {
     };
 
     Part wing = child("wing.main", PartKind::Wing, "hp.wing");
+    wing.design.spar = SparDesign{1, 0.30, st.rootDia, st.tipDia,
+                                  std::max(0, st.segments - 1), "tube"};
     // Phase 0B: wing-mounted equipment (for example twin wingtip fins) uses a
     // stable hardpoint on the positive-X tip; Pair mirrors the complete child.
     wing.hardpoints.push_back(hp("hp.tip", glm::dvec3{
@@ -508,9 +551,11 @@ AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an) {
         st.tipChord * 0.4}));
     if (!addWithMass(std::move(wing), 0, root->hardpoints[0].t)) return {};
     Part htail = child("tail.h", PartKind::HTail, "hp.tail.h");
+    htail.design.tailSupport = TailSupportDesign{};
     htail.hardpoints.push_back(hp("hp.tip", {st.hSpan * 0.5, 0.0, st.hChord * 0.4}));
     if (!addWithMass(std::move(htail), 1, root->hardpoints[1].t)) return {};
     Part vtail = child("tail.v", PartKind::VTail, "hp.tail.v");
+    vtail.design.tailSupport = TailSupportDesign{};
     if (!addWithMass(std::move(vtail), 2, root->hardpoints[2].t)) return {};
     Part prop = child("prop.main", PartKind::Prop, "hp.prop");
     if (!addWithMass(std::move(prop), 6, root->hardpoints[3].t)) return {};
@@ -518,11 +563,17 @@ AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an) {
     if (!addWithMass(std::move(cockpit), 4, root->hardpoints[4].t)) return {};
 
     Part pilot = child("pilot", PartKind::Pilot, "hp.cockpit");
+    PilotStationDesign pilotStation;
+    if (st.posture == "upright") pilotStation = {0.68, -0.30, 0.80, -0.28, 0.42};
+    else if (st.posture == "semi") pilotStation = {0.62, -0.50, 0.85, -0.80, 0.58};
+    else pilotStation = {0.60, -0.55, 0.92, -0.95, 0.68};
+    pilot.design.pilot = pilotStation;
     pilot.mount.offset.pos.z = an.pilotCGx - st.seatX;
     if (!addWithMass(std::move(pilot), 10, root->hardpoints[4].t)) return {};
 
     if (st.fairing) {
         Part fairing = child("fairing", PartKind::Fairing, "hp.cockpit");
+        fairing.design.fairing = FairingDesign{};
         if (!addWithMass(std::move(fairing), 8, root->hardpoints[4].t)) return {};
     }
 
