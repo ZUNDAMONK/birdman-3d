@@ -212,6 +212,82 @@ void mutationTests() {
     check(!graph.removeSubtree("body") && graph.size() == 1, "reject root removal");
 }
 
+void atomicEditingTests() {
+    bm::Part root = rootPart();
+    root.hardpoints.push_back({"alternate", {{4.0, 0.0, 0.0}, {0.0, 0.0, 0.0}}});
+    bm::Part wing = mounted("wing", bm::PartKind::Wing, "body", "wing");
+    wing.hardpoints.push_back({"child", {{0.0, 1.0, 0.0}, {0.0, 0.0, 0.0}}});
+    bm::Part pod = mounted("pod", bm::PartKind::Fairing, "wing", "child");
+    pod.hardpoints.push_back({"cycle", {}});
+    bm::AirframeGraph graph = bm::AirframeGraph::fromUntrusted({root, wing, pod});
+    check(graph.validate().empty(), "atomic edit fixture validates");
+
+    bm::Mount moved = graph.find("wing")->mount;
+    moved.offset.pos = {1.5, 0.25, -0.5};
+    moved.offset.rotDeg = {370.0, -725.0, 90.0};
+    moved.mirror = bm::MirrorMode::Pair;
+    check(graph.setMount("wing", moved), "atomic mount transform and mirror edit");
+    const bm::Part* movedWing = graph.find("wing");
+    check(movedWing && near(movedWing->mount.offset.rotDeg, {10.0, -5.0, 90.0}),
+          "edited mount angles are normalized");
+    int wingInstances = 0, podInstances = 0;
+    for (const auto& item : graph.resolve()) {
+        if (item.part->id == "wing") ++wingInstances;
+        if (item.part->id == "pod") ++podInstances;
+    }
+    check(wingInstances == 2 && podInstances == 2, "mount mirror edit propagates to children");
+
+    const bm::Mount beforeFailure = graph.find("wing")->mount;
+    std::string error;
+    bm::Mount invalid = beforeFailure;
+    invalid.parentId = "pod";
+    invalid.hardpointId = "cycle";
+    check(!graph.setMount("wing", invalid, &error) && !error.empty(), "cycle edit is rejected");
+    check(graph.find("wing")->mount.parentId == beforeFailure.parentId
+          && graph.find("wing")->mount.hardpointId == beforeFailure.hardpointId,
+          "cycle rejection preserves original graph");
+
+    bm::Transform3 alternate;
+    alternate.pos = {5.0, 2.0, 1.0};
+    check(graph.setHardpointTransform("body", "alternate", alternate), "hardpoint transform edit");
+    bm::Mount reattached = graph.find("pod")->mount;
+    reattached.parentId = "body";
+    reattached.hardpointId = "alternate";
+    check(graph.setMount("pod", reattached), "atomic reattach to another hardpoint");
+    const auto reattachedPlaced = graph.resolve();
+    const bm::AirframeGraph::Placed* podPlacement = nullptr;
+    for (const auto& item : reattachedPlaced)
+        if (!item.mirrored && item.part->id == "pod") podPlacement = &item;
+    check(podPlacement && near(point(podPlacement->world), {5.0, 2.0, 1.0}),
+          "reattached part follows edited hardpoint");
+
+    invalid = beforeFailure;
+    invalid.hardpointId = "missing";
+    check(!graph.setMount("wing", invalid), "missing hardpoint edit is rejected");
+    check(!graph.setMount("body", {}), "root mount edit is rejected");
+
+    bm::Part renamed = *graph.find("wing");
+    renamed.id = "renamed";
+    check(!graph.replacePart("wing", renamed), "stable part id cannot be changed");
+
+    bm::Part brokenRoot = *graph.find("body");
+    brokenRoot.hardpoints.erase(brokenRoot.hardpoints.begin() + 2);
+    check(!graph.replacePart("body", brokenRoot), "hardpoint used by a child cannot be removed");
+    check(graph.find("body")->hardpoints.size() == 3, "failed parent edit is rolled back");
+
+    bm::Transform3 invalidTransform;
+    invalidTransform.pos.x = std::numeric_limits<double>::quiet_NaN();
+    check(!graph.setHardpointTransform("body", "alternate", invalidTransform),
+          "non-finite hardpoint edit is rejected");
+    const bm::Hardpoint* preservedAlternate = nullptr;
+    for (const auto& hp : graph.find("body")->hardpoints)
+        if (hp.id == "alternate") preservedAlternate = &hp;
+    check(preservedAlternate && near(preservedAlternate->t.pos, {5.0, 2.0, 1.0}),
+          "invalid hardpoint edit preserves original transform");
+    check(!graph.setHardpointTransform("body", "missing", {}), "unknown hardpoint edit is rejected");
+    check(!graph.replacePart("missing", {}), "unknown part replacement is rejected");
+}
+
 const bm::AirframeGraph::Placed* normalPlacement(
     const std::vector<bm::AirframeGraph::Placed>& placed, const std::string& id) {
     for (const auto& item : placed)
@@ -488,6 +564,7 @@ int main() {
     graphResolveTests();
     validationTests();
     mutationTests();
+    atomicEditingTests();
     defaultLayoutTests();
     aggregateMassTests();
     designJsonV2Tests();

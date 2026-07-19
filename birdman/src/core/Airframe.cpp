@@ -56,6 +56,10 @@ void setError(std::string* error, std::string message) {
     if (error) *error = std::move(message);
 }
 
+std::string validationMessage(const AirframeGraph::ValidationError& error) {
+    return error.partId.empty() ? error.message : error.partId + ": " + error.message;
+}
+
 } // namespace
 
 const char* partKindName(PartKind kind) {
@@ -197,6 +201,47 @@ bool AirframeGraph::removeSubtree(const std::string& id, std::string* error) {
     }
     for (const auto& partId : doomed) parts_.erase(partId);
     return true;
+}
+
+bool AirframeGraph::replacePart(const std::string& id, Part replacement, std::string* error) {
+    const auto existing = parts_.find(id);
+    if (existing == parts_.end()) { setError(error, "part not found: " + id); return false; }
+    normalize(replacement);
+    if (replacement.id != id) { setError(error, "part id cannot be changed"); return false; }
+
+    AirframeGraph candidate = *this;
+    candidate.parts_[id] = std::move(replacement);
+    const auto errors = candidate.validate();
+    if (!errors.empty()) {
+        setError(error, validationMessage(errors.front()));
+        return false;
+    }
+    *this = std::move(candidate);
+    return true;
+}
+
+bool AirframeGraph::setMount(const std::string& id, Mount mount, std::string* error) {
+    const Part* current = find(id);
+    if (!current) { setError(error, "part not found: " + id); return false; }
+    if (id == rootId_) { setError(error, "root mount cannot be changed"); return false; }
+    Part replacement = *current;
+    replacement.mount = std::move(mount);
+    return replacePart(id, std::move(replacement), error);
+}
+
+bool AirframeGraph::setHardpointTransform(const std::string& partId, const std::string& hardpointId,
+                                          Transform3 transform, std::string* error) {
+    const Part* current = find(partId);
+    if (!current) { setError(error, "part not found: " + partId); return false; }
+    Part replacement = *current;
+    auto hardpoint = std::find_if(replacement.hardpoints.begin(), replacement.hardpoints.end(),
+        [&](const Hardpoint& hp) { return hp.id == hardpointId; });
+    if (hardpoint == replacement.hardpoints.end()) {
+        setError(error, "hardpoint not found: " + hardpointId);
+        return false;
+    }
+    hardpoint->t = std::move(transform);
+    return replacePart(partId, std::move(replacement), error);
 }
 
 const Part* AirframeGraph::find(const std::string& id) const {
