@@ -1,4 +1,5 @@
 #include "core/Airframe.hpp"
+#include "core/Types.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -163,13 +164,14 @@ bool AirframeGraph::addPart(Part part, std::string* error) {
             return false;
         }
     }
-    const MassNode& mass = part.mass;
-    bool finiteInertia = true;
-    for (int c = 0; c < 3; ++c) for (int r = 0; r < 3; ++r)
-        finiteInertia = finiteInertia && std::isfinite(mass.I0[c][r]);
-    if (!std::isfinite(mass.kg) || mass.kg < 0.0 || !finiteVec(mass.cgLocal) || !finiteInertia) {
-        setError(error, "invalid mass node");
-        return false;
+    for (const MassNode& mass : part.massNodes) {
+        bool finiteInertia = true;
+        for (int c = 0; c < 3; ++c) for (int r = 0; r < 3; ++r)
+            finiteInertia = finiteInertia && std::isfinite(mass.I0[c][r]);
+        if (!std::isfinite(mass.kg) || mass.kg < 0.0 || !finiteVec(mass.cgLocal) || !finiteInertia) {
+            setError(error, "invalid mass node");
+            return false;
+        }
     }
     const bool isRoot = part.mount.parentId.empty();
     const std::string id = part.id;
@@ -223,12 +225,13 @@ std::vector<AirframeGraph::ValidationError> AirframeGraph::validate() const {
             else if (!hardpointIds.insert(hp.id).second) errors.push_back({part.id, "duplicate hardpoint id: " + hp.id});
             if (!validTransform(hp.t)) errors.push_back({part.id, "invalid hardpoint transform: " + hp.id});
         }
-        const MassNode& mass = part.mass;
-        bool finiteInertia = true;
-        for (int c = 0; c < 3; ++c) for (int r = 0; r < 3; ++r)
-            finiteInertia = finiteInertia && std::isfinite(mass.I0[c][r]);
-        if (!std::isfinite(mass.kg) || mass.kg < 0.0 || !finiteVec(mass.cgLocal) || !finiteInertia)
-            errors.push_back({part.id, "invalid mass node"});
+        for (const MassNode& mass : part.massNodes) {
+            bool finiteInertia = true;
+            for (int c = 0; c < 3; ++c) for (int r = 0; r < 3; ++r)
+                finiteInertia = finiteInertia && std::isfinite(mass.I0[c][r]);
+            if (!std::isfinite(mass.kg) || mass.kg < 0.0 || !finiteVec(mass.cgLocal) || !finiteInertia)
+                errors.push_back({part.id, "invalid mass node"});
+        }
     }
     if (roots != 1) errors.push_back({"", "graph must have exactly one root"});
 
@@ -297,6 +300,112 @@ std::vector<AirframeGraph::Placed> AirframeGraph::resolve() const {
         result.insert(result.end(), partPlacements.begin(), partPlacements.end());
     }
     return result;
+}
+
+AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an) {
+    AirframeGraph graph;
+    const double hWing = st.posture == "upright" ? 2.4 : 2.0;
+    const double hBoom = hWing - 0.15;
+    const double propH = st.propConfig == "pylon" ? hBoom + 0.9 : hBoom;
+    const double zBeamRear = st.seatX + 0.55;
+    const double boomWingZ = zBeamRear + (an.fusLen - zBeamRear) * st.boomWingPos;
+
+    auto massAt = [&](int item, const glm::dmat4& world) {
+        MassNode node;
+        node.kg = an.items.at((std::size_t)item).w;
+        const glm::dvec3 origin(world[3]);
+        const glm::dvec3 target{origin.x, origin.y, an.items.at((std::size_t)item).x};
+        node.cgLocal = glm::dvec3(glm::inverse(world) * glm::dvec4(target, 1.0));
+        node.analysisItem = item;
+        return node;
+    };
+    auto hp = [](std::string id, glm::dvec3 pos, glm::dvec3 rot = glm::dvec3(0.0)) {
+        return Hardpoint{std::move(id), {pos, rot}};
+    };
+    auto child = [](std::string id, PartKind kind, std::string hardpoint) {
+        Part part;
+        part.id = std::move(id);
+        part.kind = kind;
+        part.mount.parentId = "fuselage";
+        part.mount.hardpointId = std::move(hardpoint);
+        return part;
+    };
+
+    Part fuselage;
+    fuselage.id = "fuselage";
+    fuselage.kind = PartKind::Fuselage;
+    fuselage.hardpoints = {
+        hp("hp.wing", {0.0, hWing, st.wingX}, {st.incidence, 0.0, 0.0}),
+        hp("hp.tail.h", {0.0, hBoom + 0.02, an.xHT}),
+        hp("hp.tail.v", {0.0, hBoom, an.xVT}),
+        hp("hp.prop", {0.0, propH, an.xProp}),
+        hp("hp.cockpit", {0.0, 0.0, st.seatX}),
+        hp("hp.ui.tailbeam", {0.0, hBoom, (zBeamRear + an.fusLen) * 0.5}),
+        hp("hp.gear.front", {0.0, st.gear == "tandem" ? 0.14 : 0.13, st.seatX - 0.55}),
+        hp("hp.gear.rear", {0.0, 0.15, st.seatX + 0.55}),
+        hp("hp.gear.main.tri", {0.55, 0.15, st.seatX + 0.45}),
+        hp("hp.gear.main.mono", {0.0, 0.16, st.seatX + 0.05}),
+        hp("hp.gear.tail", {0.0, 0.07, an.fusLen - 0.3}),
+        hp("hp.boomwing", {0.0, hBoom + 0.02, boomWingZ})
+    };
+    const glm::dmat4 identity(1.0);
+    for (int item : {3, 5, 9}) fuselage.massNodes.push_back(massAt(item, identity));
+    if (st.gear == "none") fuselage.massNodes.push_back(massAt(7, identity));
+    if (!st.fairing) fuselage.massNodes.push_back(massAt(8, identity));
+    graph.addPart(std::move(fuselage));
+
+    auto addWithMass = [&](Part part, int item, const Transform3& hardpointTransform) {
+        const glm::dmat4 world = transformMatrix(hardpointTransform) * transformMatrix(part.mount.offset);
+        part.massNodes.push_back(massAt(item, world));
+        graph.addPart(std::move(part));
+    };
+
+    Part wing = child("wing.main", PartKind::Wing, "hp.wing");
+    addWithMass(std::move(wing), 0, graph.find("fuselage")->hardpoints[0].t);
+    Part htail = child("tail.h", PartKind::HTail, "hp.tail.h");
+    addWithMass(std::move(htail), 1, graph.find("fuselage")->hardpoints[1].t);
+    Part vtail = child("tail.v", PartKind::VTail, "hp.tail.v");
+    addWithMass(std::move(vtail), 2, graph.find("fuselage")->hardpoints[2].t);
+    Part prop = child("prop.main", PartKind::Prop, "hp.prop");
+    addWithMass(std::move(prop), 6, graph.find("fuselage")->hardpoints[3].t);
+    Part cockpit = child("cockpit", PartKind::Cockpit, "hp.cockpit");
+    addWithMass(std::move(cockpit), 4, graph.find("fuselage")->hardpoints[4].t);
+
+    Part pilot = child("pilot", PartKind::Pilot, "hp.cockpit");
+    pilot.mount.offset.pos.z = an.pilotCGx - st.seatX;
+    addWithMass(std::move(pilot), 10, graph.find("fuselage")->hardpoints[4].t);
+
+    if (st.fairing) {
+        Part fairing = child("fairing", PartKind::Fairing, "hp.cockpit");
+        addWithMass(std::move(fairing), 8, graph.find("fuselage")->hardpoints[4].t);
+    }
+
+    auto addGear = [&](std::string id, std::string hardpoint, MirrorMode mirror, bool carriesMass) {
+        Part gear = child(std::move(id), PartKind::Gear, hardpoint);
+        gear.mount.mirror = mirror;
+        const Part* root = graph.find("fuselage");
+        const auto it = std::find_if(root->hardpoints.begin(), root->hardpoints.end(),
+            [&](const Hardpoint& value) { return value.id == hardpoint; });
+        if (carriesMass) gear.massNodes.push_back(massAt(7, transformMatrix(it->t)));
+        graph.addPart(std::move(gear));
+    };
+    if (st.gear == "tri") {
+        addGear("gear.front", "hp.gear.front", MirrorMode::None, true);
+        addGear("gear.main", "hp.gear.main.tri", MirrorMode::Pair, false);
+    } else if (st.gear == "tandem") {
+        addGear("gear.front", "hp.gear.front", MirrorMode::None, true);
+        addGear("gear.rear", "hp.gear.rear", MirrorMode::None, false);
+    } else if (st.gear == "mono") {
+        addGear("gear.main", "hp.gear.main.mono", MirrorMode::None, true);
+        addGear("gear.tail", "hp.gear.tail", MirrorMode::None, false);
+    }
+
+    if (st.boomWing != "none") {
+        Part boomWing = child("boomwing", PartKind::BoomWing, "hp.boomwing");
+        boomWing.mount.mirror = st.boomWing == "LR" ? MirrorMode::Pair : MirrorMode::None;
+        graph.addPart(std::move(boomWing));
+    }
+    return graph;
 }
 
 } // namespace bm

@@ -65,6 +65,9 @@ add_executable(airframe_test
     tests/airframe_test.cpp
     src/core/Airframe.cpp
     src/core/MiniJson.cpp
+    src/core/Aircraft.cpp
+    src/core/Physics.cpp
+    src/core/Weather.cpp
 )
 target_include_directories(airframe_test PRIVATE src)
 target_link_libraries(airframe_test PRIVATE glm::glm)

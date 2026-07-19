@@ -3,6 +3,7 @@
 #include <SFML/Graphics.hpp>
 #include <array>
 #include "core/Types.hpp"
+#include "core/Airframe.hpp"
 #include "render/Renderer3D.hpp"
 #include "render/Camera.hpp"
 #include "render/HUD.hpp"
@@ -94,6 +95,7 @@ private:
 
     AircraftParams st_;
     Analysis an_;
+    AirframeGraph graph_;
     SimParams prm_;
     SimResult simRes_;
 
