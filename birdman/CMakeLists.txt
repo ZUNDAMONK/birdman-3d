@@ -15,6 +15,8 @@ find_package(glm REQUIRED)
 
 add_executable(birdman
     src/main.cpp
+    src/core/Airframe.cpp
+    src/core/MiniJson.cpp
     src/core/Aircraft.cpp
     src/core/Physics.cpp
     src/core/Weather.cpp
@@ -58,6 +60,15 @@ add_executable(physics_test
 )
 target_include_directories(physics_test PRIVATE src)
 
+# Phase 0A-1: 自由取付点・部品接続グラフの独立単体テスト。
+add_executable(airframe_test
+    tests/airframe_test.cpp
+    src/core/Airframe.cpp
+    src/core/MiniJson.cpp
+)
+target_include_directories(airframe_test PRIVATE src)
+target_link_libraries(airframe_test PRIVATE glm::glm)
+
 # Phase 6: 物理回帰を標準CTestワークフローへ登録する。
 # 既存テスト内で長時間巡航、30/60/120fps、x1/x10/x40、3DOF/6DOFを検証する。
 include(CTest)
@@ -66,6 +77,11 @@ if(BUILD_TESTING)
     set_tests_properties(physics_regression PROPERTIES
         LABELS "physics;regression;release"
         TIMEOUT 30
+    )
+    add_test(NAME airframe_core COMMAND airframe_test)
+    set_tests_properties(airframe_core PROPERTIES
+        LABELS "airframe;core;phase0a"
+        TIMEOUT 10
     )
 endif()
 
