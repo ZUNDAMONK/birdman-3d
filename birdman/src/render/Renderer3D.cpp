@@ -1653,6 +1653,8 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
     const double half = st.span / 2;
     const double dihT = std::tan((st.jig == "flat" ? 0 : st.dihedral) * PI / 180);
     const double seat = cockpitPos.z;
+    const SparDesign sparSpec = wingPlaced->part->design.spar.value_or(
+        SparDesign{1, 0.30, st.rootDia, st.tipDia, std::max(0, st.segments - 1), "tube"});
     wingH_ = wingPos.y;
     wingZ_ = wingPos.z;
     wingDrawTransform_ = correctionFrom(wingPlaced->world, {0.0, wingPos.y, wingPos.z});
@@ -1694,34 +1696,47 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
                 for (size_t j = 1; j + 1 < poly.size(); j++)
                     em.tri(rp(0), rp(j), rp(j + 1));
             }
-            // 主桁(局所コード30%位置・翼型中心線上・テーパー、細分割でしなりが出る)。
-            // 位置と半径を各ステーションの翼型厚みに合わせ、外皮からはみ出さない
-            em.color(0x23282e);
-            const double upF = afYAt(AF.up, 0.30), loF = afYAt(AF.lo, 0.30);   // コード比
-            auto sparAt = [&](double y) {
-                const double ch = chordAt(st, y / half);
-                return glm::dvec3(side * y,
-                                  hWing + dihT * y + 0.5 * (upF + loF) * ch,   // 翼型の中心線
-                                  wingPos.z + 0.30 * ch);                       // 局所コードの30%
-            };
-            auto sparR = [&](double y) {
-                const double ch = chordAt(st, y / half);
-                const double rmax = 0.46 * (upF - loF) * ch;   // 外皮の内側に収まる上限
-                return clamp(lerp(st.rootDia, st.tipDia, y / half) / 2000, 0.008, rmax);
-            };
-            const int NS = 12;
-            for (int i = 0; i < NS; i++) {
-                const double y0 = half * i / NS, y1 = half * (i + 1) / NS;
-                em.strut(sparAt(y0), sparAt(y1), sparR(y0), sparR(y1), 10);
-            }
-            // 桁接合スリーブ(桁より一回り太いが、外皮内には収める)
-            em.color(0xe8590c);
-            for (int s = 1; s < st.segments; s++) {
-                const double jy = half * s / st.segments;
-                const double ch = chordAt(st, jy / half);
-                const double rj = std::min(sparR(jy) * 1.25, 0.48 * (upF - loF) * ch);
-                em.strut(sparAt(std::max(0.0, jy - 0.1)), sparAt(std::min(half, jy + 0.1)),
-                         rj, rj, 12);
+            // 主桁: 本数・翼弦位置・断面・テーパー・継手をPart固有仕様から描画。
+            const int sparCount = std::max(1, sparSpec.count);
+            for (int sparIndex = 0; sparIndex < sparCount; ++sparIndex) {
+                const double chordFrac = clamp(sparSpec.chordFrac
+                    + (sparIndex - (sparCount - 1) * 0.5) * 0.11, 0.10, 0.80);
+                const double upF = afYAt(AF.up, chordFrac), loF = afYAt(AF.lo, chordFrac);
+                auto sparAt = [&](double y, double verticalOffset = 0.0) {
+                    const double ch = chordAt(st, y / half);
+                    return glm::dvec3(side * y,
+                                      hWing + dihT * y + (0.5 * (upF + loF) + verticalOffset) * ch,
+                                      wingPos.z + chordFrac * ch);
+                };
+                auto sparR = [&](double y) {
+                    const double ch = chordAt(st, y / half);
+                    const double rmax = 0.46 * (upF - loF) * ch;
+                    return clamp(lerp(sparSpec.rootDiaMm, sparSpec.tipDiaMm, y / half) / 2000,
+                                 0.006, rmax);
+                };
+                em.color(sparSpec.section == "tube" ? 0x23282e
+                         : sparSpec.section == "box" ? 0x50483f : 0x33465a);
+                const int NS = 12;
+                for (int i = 0; i < NS; i++) {
+                    const double y0 = half * i / NS, y1 = half * (i + 1) / NS;
+                    if (sparSpec.section == "i-beam") {
+                        const double o = 0.32 * (upF - loF);
+                        em.strut(sparAt(y0), sparAt(y1), sparR(y0) * 0.38, sparR(y1) * 0.38, 4);
+                        em.strut(sparAt(y0, o), sparAt(y1, o), sparR(y0) * 0.32, sparR(y1) * 0.32, 4);
+                        em.strut(sparAt(y0, -o), sparAt(y1, -o), sparR(y0) * 0.32, sparR(y1) * 0.32, 4);
+                    } else {
+                        em.strut(sparAt(y0), sparAt(y1), sparR(y0), sparR(y1),
+                                 sparSpec.section == "box" ? 4 : 10);
+                    }
+                }
+                em.color(0xe8590c);
+                for (int joint = 1; joint <= sparSpec.jointCount; ++joint) {
+                    const double jy = half * joint / (sparSpec.jointCount + 1.0);
+                    const double ch = chordAt(st, jy / half);
+                    const double rj = std::min(sparR(jy) * 1.25, 0.48 * (upF - loF) * ch);
+                    em.strut(sparAt(std::max(0.0, jy - 0.1)), sparAt(std::min(half, jy + 0.1)),
+                             rj, rj, 12);
+                }
             }
             // フィルム+エルロン(半透明メッシュ)
             em.m = &wingFilm_;
@@ -1782,6 +1797,12 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
     }
     // パイロット(体幹ポリライン。フェアリングの包含サイズ算出にも使う)
     std::vector<glm::dvec3> pilotBody;
+    PilotStationDesign defaultPilot;
+    if (st.posture == "upright") defaultPilot = {0.68, -0.30, 0.80, -0.28, 0.42};
+    else if (st.posture == "semi") defaultPilot = {0.62, -0.50, 0.85, -0.80, 0.58};
+    else defaultPilot = {0.60, -0.55, 0.92, -0.95, 0.68};
+    const PilotStationDesign pilotSpec = pilotPlaced
+        ? pilotPlaced->part->design.pilot.value_or(defaultPilot) : defaultPilot;
     auto Pv = [&](double z, double y) { return glm::dvec3(0, y, z); };
     if (st.posture == "upright")
         pilotBody = {Pv(seat+0.02,1.55), Pv(seat+0.02,1.30), Pv(seat,0.68), Pv(seat-0.30,0.80), Pv(seat-0.28,0.42)};
@@ -1789,6 +1810,9 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
         pilotBody = {Pv(seat+0.35,1.18), Pv(seat+0.18,1.02), Pv(seat,0.62), Pv(seat-0.50,0.85), Pv(seat-0.80,0.58)};
     else
         pilotBody = {Pv(seat+0.50,0.86), Pv(seat+0.30,0.78), Pv(seat,0.60), Pv(seat-0.55,0.92), Pv(seat-0.95,0.68)};
+    pilotBody[2].y = pilotSpec.seatHeightM;
+    pilotBody[3] = Pv(seat + pilotSpec.pedalZM, pilotSpec.pedalHeightM);
+    pilotBody[4] = Pv(seat + pilotSpec.crankZM, pilotSpec.crankHeightM);
     if (pilotPlaced) {
         glPushMatrix();
         glMultMatrixd(glm::value_ptr(pilotCorrection));
@@ -1895,6 +1919,34 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
         }
     }
     // テールビーム翼
+    // 尾翼支持材: Part固有の取付方式・本数・径を各配置インスタンスへ描画する。
+    for (const auto& placed : layout) {
+        if (placed.part->id != "tail.h" && placed.part->id != "tail.v") continue;
+        if (!placed.part->design.tailSupport) continue;
+        const TailSupportDesign& support = *placed.part->design.tailSupport;
+        if (support.mounting == "cantilever" || support.supportCount <= 0) continue;
+        const double radius = support.mounting == "wire"
+            ? std::max(0.0015, support.supportDiaMm / 2000.0)
+            : support.supportDiaMm / 2000.0;
+        setColor(support.mounting == "wire" ? 0x707984 : 0x33465a);
+        glPushMatrix();
+        glMultMatrixd(glm::value_ptr(placed.world));
+        for (int i = 0; i < support.supportCount; ++i) {
+            const int side = i % 2 ? -1 : 1;
+            const double lane = 0.35 + 0.5 * ((i / 2 + 1.0) / (support.supportCount / 2.0 + 1.0));
+            if (placed.part->id == "tail.h") {
+                const glm::dvec3 tip{side * st.hSpan * 0.5 * lane, 0.0, st.hChord * 0.15};
+                const glm::dvec3 base{0.0, -0.45, st.hChord * 0.05};
+                drawStrut(base, tip, radius, radius, support.mounting == "wire" ? 5 : 8);
+            } else {
+                const glm::dvec3 tip{0.0, st.vHeight * lane, st.vChord * 0.4};
+                const glm::dvec3 base{side * 0.32, 0.0, st.vChord * 0.12};
+                drawStrut(base, tip, radius, radius, support.mounting == "wire" ? 5 : 8);
+            }
+        }
+        glPopMatrix();
+    }
+
     {
         setColor(0xc8d8e8);
         auto mkBW = [&](int side, const glm::dvec3& origin) {
@@ -1941,16 +1993,20 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
             const glm::dvec3& ck = pilotBody[4];
             samps.push_back({ck.z, ck.y - 0.06, ck.y + 0.06, 0.18});
         }
-        // 2) 前後範囲(ノーズ/テールのテーパーはパイロットの外側で行う)
+        const FairingDesign fairingSpec = fairingPlaced->part->design.fairing.value_or(FairingDesign{});
+        // 2) 前後範囲。ユーザー指定全長を人体中心の周囲へ配置する。
         double zMin = 1e9, zMax = -1e9;
         for (const auto& s : samps) { zMin = std::min(zMin, s.z); zMax = std::max(zMax, s.z); }
-        const double zF = zMin - 0.25, zR = zMax + 0.50, zLen = zR - zF;
+        const double zMid = 0.5 * (zMin + zMax);
+        const double zLen = fairingSpec.lengthM;
+        const double zF = zMid - zLen * 0.5;
         // 3) 断面プロファイル f(t): t<tm=楕円ノーズ、t>=tm=cosテーパー(最大断面はtm)
-        const double tm = 0.38;
+        const double tm = fairingSpec.noseRatio;
         auto prof = [&](double t) {
             t = clamp(t, 0.0, 1.0);
             const double f = t < tm ? std::sqrt(std::max(0.0, 1 - ((tm - t) / tm) * ((tm - t) / tm)))
-                                    : std::pow(std::cos((t - tm) / (1 - tm) * PI / 2), 0.85);
+                                    : std::pow(std::cos((t - tm) / (1 - tm) * PI / 2),
+                                               0.45 + 0.8 * fairingSpec.tailRatio);
             return std::max(f, 0.02);
         };
         // 4) 中心線 yCen(t): サンプル中点の最小二乗直線(リカンベントの寝姿勢に追従)
@@ -1964,13 +2020,8 @@ void Renderer3D::buildAircraft(const AircraftParams& st, const Analysis& an,
         const double cA = (swy - cB * swt) / sw;                          // 切片
         auto yCen = [&](double t) { return cA + cB * t; };
         // 5) 包含に必要な最大半幅/半高(サンプル点を必ず内包するよう構成的に決定)
-        double Wmax = 0, Hmax = 0;
-        const double margin = 0.05;
-        for (const auto& s : samps) {
-            const double t = (s.z - zF) / zLen, f = prof(t);
-            Wmax = std::max(Wmax, (s.xh + margin) / f);
-            Hmax = std::max(Hmax, (std::max(s.yHi - yCen(t), yCen(t) - s.yLo) + margin) / f);
-        }
+        const double Wmax = fairingSpec.widthM * 0.5;
+        const double Hmax = fairingSpec.heightM * 0.5;
         // 6) 検証: 全サンプル点が断面楕円に収まるか(構成上収まるはずだが数値保険)
         for (const auto& s : samps) {
             const double t = (s.z - zF) / zLen, f = prof(t);

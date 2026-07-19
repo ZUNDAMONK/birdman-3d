@@ -304,11 +304,32 @@ void DesignPanel::build(AircraftParams* st, std::function<void()> onChange,
             const auto keys = componentKeys();
             if (i >= keys.size()) return;
             std::string error;
-            if (mountCb_.toggleComponent && mountCb_.toggleComponent(keys[i], error))
+            if (mountCb_.toggleComponent && mountCb_.toggleComponent(keys[i], error)) {
+                loadDetailEditor();
                 mountMessage_ = u8"部品構成を変更しました";
-            else if (!error.empty()) mountMessage_ = u8"変更できません: " + error;
+            } else if (!error.empty()) mountMessage_ = u8"変更できません: " + error;
         };
     }
+    detailChoice_.charSize = 10;
+    detailChoice_.onClick = [this] {
+        if (pendingDesign_.spar) {
+            std::string& value = pendingDesign_.spar->section;
+            value = value == "tube" ? "box" : value == "box" ? "i-beam" : "tube";
+        } else if (pendingDesign_.tailSupport) {
+            std::string& value = pendingDesign_.tailSupport->mounting;
+            value = value == "cantilever" ? "strut" : value == "strut" ? "wire" : "cantilever";
+        }
+        mountMessage_.clear();
+    };
+    detailApply_.label = u8"固有設計を適用"; detailApply_.style = 1; detailApply_.charSize = 11;
+    detailApply_.onClick = [this] {
+        std::string error;
+        if (detailEditable_ && mountCb_.applyDesign && mountCb_.applyDesign(part_, pendingDesign_, error)) {
+            loadDetailEditor(); mountMessage_ = u8"固有設計を適用しました";
+        } else if (!error.empty()) mountMessage_ = u8"適用できません: " + error;
+    };
+    detailCancel_.label = u8"固有設計を取消"; detailCancel_.charSize = 11;
+    detailCancel_.onClick = [this] { loadDetailEditor(); mountMessage_ = u8"固有設計の変更を取り消しました"; };
 }
 
 std::vector<std::string> DesignPanel::componentKeys() const {
@@ -328,6 +349,65 @@ void DesignPanel::loadMountEditor() {
             if (mountTargets_[i].parentId == pendingMount_.parentId
                 && mountTargets_[i].hardpointId == pendingMount_.hardpointId) { mountTargetIndex_ = i; break; }
     } else mountTargets_.clear();
+}
+
+void DesignPanel::loadDetailEditor() {
+    pendingDesign_ = {};
+    detailEditable_ = mountCb_.getDesign && mountCb_.getDesign(part_, pendingDesign_);
+    detailSliders_.clear();
+    if (!detailEditable_) return;
+    auto add = [this](const std::string& label, std::function<double()> get,
+                      std::function<void(double)> set, double minV, double maxV,
+                      double step, const std::string& unit) {
+        Slider slider;
+        slider.label = label; slider.unit = unit;
+        slider.minV = minV; slider.maxV = maxV; slider.step = step;
+        slider.get = std::move(get);
+        slider.set = [this, set = std::move(set)](double value) { set(value); mountMessage_.clear(); };
+        detailSliders_.push_back(std::move(slider));
+    };
+    if (pendingDesign_.spar) {
+        add(u8"主桁本数", [this] { return (double)pendingDesign_.spar->count; },
+            [this](double v) { pendingDesign_.spar->count = (int)std::lround(v); }, 1, 4, 1, u8" 本");
+        add(u8"桁位置（翼弦比）", [this] { return pendingDesign_.spar->chordFrac; },
+            [this](double v) { pendingDesign_.spar->chordFrac = v; }, 0.1, 0.8, 0.01, "");
+        add(u8"翼根断面寸法", [this] { return pendingDesign_.spar->rootDiaMm; },
+            [this](double v) { pendingDesign_.spar->rootDiaMm = v; }, 20, 300, 5, " mm");
+        add(u8"翼端断面寸法", [this] { return pendingDesign_.spar->tipDiaMm; },
+            [this](double v) { pendingDesign_.spar->tipDiaMm = v; }, 10, 300, 5, " mm");
+        add(u8"継手数", [this] { return (double)pendingDesign_.spar->jointCount; },
+            [this](double v) { pendingDesign_.spar->jointCount = (int)std::lround(v); }, 0, 12, 1, u8" 個");
+    }
+    if (pendingDesign_.fairing) {
+        add(u8"フェアリング全長", [this] { return pendingDesign_.fairing->lengthM; },
+            [this](double v) { pendingDesign_.fairing->lengthM = v; }, 0.5, 6, 0.05, " m");
+        add(u8"最大幅", [this] { return pendingDesign_.fairing->widthM; },
+            [this](double v) { pendingDesign_.fairing->widthM = v; }, 0.25, 2.5, 0.05, " m");
+        add(u8"最大高", [this] { return pendingDesign_.fairing->heightM; },
+            [this](double v) { pendingDesign_.fairing->heightM = v; }, 0.25, 2.5, 0.05, " m");
+        add(u8"ノーズ長比", [this] { return pendingDesign_.fairing->noseRatio; },
+            [this](double v) { pendingDesign_.fairing->noseRatio = v; }, 0.05, 0.45, 0.01, "");
+        add(u8"テール絞り比", [this] { return pendingDesign_.fairing->tailRatio; },
+            [this](double v) { pendingDesign_.fairing->tailRatio = v; }, 0.2, 0.9, 0.01, "");
+    }
+    if (pendingDesign_.pilot) {
+        add(u8"座面高さ", [this] { return pendingDesign_.pilot->seatHeightM; },
+            [this](double v) { pendingDesign_.pilot->seatHeightM = v; }, 0.2, 1.8, 0.05, " m");
+        add(u8"ペダル前後位置", [this] { return pendingDesign_.pilot->pedalZM; },
+            [this](double v) { pendingDesign_.pilot->pedalZM = v; }, -3, 3, 0.05, " m");
+        add(u8"ペダル高さ", [this] { return pendingDesign_.pilot->pedalHeightM; },
+            [this](double v) { pendingDesign_.pilot->pedalHeightM = v; }, 0.1, 1.8, 0.05, " m");
+        add(u8"クランク前後位置", [this] { return pendingDesign_.pilot->crankZM; },
+            [this](double v) { pendingDesign_.pilot->crankZM = v; }, -3, 3, 0.05, " m");
+        add(u8"クランク高さ", [this] { return pendingDesign_.pilot->crankHeightM; },
+            [this](double v) { pendingDesign_.pilot->crankHeightM = v; }, 0.1, 1.8, 0.05, " m");
+    }
+    if (pendingDesign_.tailSupport) {
+        add(u8"支持材本数", [this] { return (double)pendingDesign_.tailSupport->supportCount; },
+            [this](double v) { pendingDesign_.tailSupport->supportCount = (int)std::lround(v); }, 0, 8, 1, u8" 本");
+        add(u8"支持材径", [this] { return pendingDesign_.tailSupport->supportDiaMm; },
+            [this](double v) { pendingDesign_.tailSupport->supportDiaMm = v; }, 2, 80, 1, " mm");
+    }
 }
 
 // 部位→関連セクション(sections_のindex)。build()内のsec()呼び出し順と対応:
@@ -362,6 +442,7 @@ void DesignPanel::openFor(BodyPart part, sf::Vector2f anchor, float W, float H) 
     updateDockRect(W, H);
     mountMessage_.clear();
     loadMountEditor();
+    loadDetailEditor();
     relayout();
 }
 
@@ -398,6 +479,15 @@ void DesignPanel::relayout() {
         for (std::size_t i = 0; i < components.size(); ++i)
             componentButtons_[i].rect = {x0 + (float)i * (cw + 4), y, cw, 30};
         y += 58;
+    }
+    if (detailEditable_) {
+        y += 26;
+        for (auto& slider : detailSliders_) { slider.rect = {x0, y, w, 34}; y += 38; }
+        if (pendingDesign_.spar || pendingDesign_.tailSupport) {
+            detailChoice_.rect = {x0, y, w, 28}; y += 34;
+        }
+        detailApply_.rect = {x0, y, (w - 4) / 2, 28};
+        detailCancel_.rect = {x0 + (w - 4) / 2 + 4, y, (w - 4) / 2, 28}; y += 52;
     }
     for (int si : activeSections_) {
         if (si < 0 || si >= (int)sections_.size()) continue;
@@ -453,6 +543,12 @@ bool DesignPanel::handleEvent(const sf::Event& ev, sf::Vector2f m, float W, floa
     }
     const auto components = componentKeys();
     for (std::size_t i = 0; i < components.size(); ++i) consumed |= componentButtons_[i].handle(ev, m);
+    if (detailEditable_) {
+        for (auto& slider : detailSliders_) consumed |= slider.handle(ev, m);
+        if (pendingDesign_.spar || pendingDesign_.tailSupport) consumed |= detailChoice_.handle(ev, m);
+        consumed |= detailApply_.handle(ev, m);
+        consumed |= detailCancel_.handle(ev, m);
+    }
     for (int si : activeSections_) {
         if (si < 0 || si >= (int)sections_.size()) continue;
         auto& sec = sections_[si];
@@ -540,12 +636,53 @@ void DesignPanel::draw(sf::RenderTarget& rt, const sf::Font& font, float W, floa
             const bool present = mountCb_.hasComponent && mountCb_.hasComponent(components[i]);
             componentButtons_[i].label = names.at(components[i]) + (present ? ": ON" : ": OFF");
             componentButtons_[i].style = present ? 2 : 0;
-            componentButtons_[i].draw(rt, font, alphaMul);
+            if (componentButtons_[i].rect.top + componentButtons_[i].rect.height > top + headerH
+                && componentButtons_[i].rect.top < top + panelH)
+                componentButtons_[i].draw(rt, font, alphaMul);
         }
         y += 36;
         drawText(rt, font, u8"このPhaseでは配置・表示のみ（飛行物理への反映は後続）",
                  x0, y, 9, A(TEXT_DIM));
         y += 22;
+    }
+    if (detailEditable_) {
+        if (y + 20 > top + headerH && y < top + panelH) {
+            drawPanelRect(rt, {x0 - 4, y, w + 8, 22}, A(BLUE_DIM), sf::Color::Transparent, 0);
+            drawText(rt, font, u8"部品固有設計", x0 + 4, y + 3, 13, A(sf::Color::White), 0, true);
+        }
+        y += 26;
+        for (auto& slider : detailSliders_) {
+            if (slider.rect.top + 34 > top + headerH && slider.rect.top < top + panelH)
+                slider.draw(rt, font, alphaMul);
+            y += 38;
+        }
+        if (pendingDesign_.spar) {
+            const std::string section = pendingDesign_.spar->section == "tube" ? u8"円管"
+                : pendingDesign_.spar->section == "box" ? u8"箱型" : "I-beam";
+            detailChoice_.label = u8"桁断面: " + section + u8"（クリックで変更）";
+            if (detailChoice_.rect.top + detailChoice_.rect.height > top + headerH
+                && detailChoice_.rect.top < top + panelH) detailChoice_.draw(rt, font, alphaMul);
+            y += 34;
+        } else if (pendingDesign_.tailSupport) {
+            const std::string mounting = pendingDesign_.tailSupport->mounting == "cantilever" ? u8"片持ち"
+                : pendingDesign_.tailSupport->mounting == "strut" ? u8"支柱" : u8"張線";
+            detailChoice_.label = u8"取付方式: " + mounting + u8"（クリックで変更）";
+            if (detailChoice_.rect.top + detailChoice_.rect.height > top + headerH
+                && detailChoice_.rect.top < top + panelH) detailChoice_.draw(rt, font, alphaMul);
+            y += 34;
+        }
+        if (detailApply_.rect.top + detailApply_.rect.height > top + headerH
+            && detailApply_.rect.top < top + panelH) detailApply_.draw(rt, font, alphaMul);
+        if (detailCancel_.rect.top + detailCancel_.rect.height > top + headerH
+            && detailCancel_.rect.top < top + panelH) detailCancel_.draw(rt, font, alphaMul);
+        y += 34;
+        if (mountCb_.estimateDesignMass) {
+            char mass[80];
+            std::snprintf(mass, sizeof(mass), u8"固有設計の推定質量: %.2f kg（飛行物理は未接続）",
+                          mountCb_.estimateDesignMass(part_, pendingDesign_));
+            drawText(rt, font, mass, x0, y, 9, A(TEXT_DIM));
+        }
+        y += 18;
     }
     for (int si : activeSections_) {
         if (si < 0 || si >= (int)sections_.size()) continue;

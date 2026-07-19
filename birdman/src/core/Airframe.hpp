@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -59,6 +60,44 @@ struct MassNode {
     int analysisItem = -1;
 };
 
+struct SparDesign {
+    int count = 1;
+    double chordFrac = 0.30;
+    double rootDiaMm = 110.0;
+    double tipDiaMm = 60.0;
+    int jointCount = 3;
+    std::string section = "tube";       // tube / box / i-beam
+};
+
+struct FairingDesign {
+    double lengthM = 2.1;
+    double widthM = 0.75;
+    double heightM = 1.35;
+    double noseRatio = 0.25;
+    double tailRatio = 0.55;
+};
+
+struct PilotStationDesign {
+    double seatHeightM = 0.62;
+    double pedalZM = -0.50;
+    double pedalHeightM = 0.58;
+    double crankZM = -0.80;
+    double crankHeightM = 0.58;
+};
+
+struct TailSupportDesign {
+    std::string mounting = "cantilever"; // cantilever / strut / wire
+    int supportCount = 0;
+    double supportDiaMm = 20.0;
+};
+
+struct PartDesign {
+    std::optional<SparDesign> spar;
+    std::optional<FairingDesign> fairing;
+    std::optional<PilotStationDesign> pilot;
+    std::optional<TailSupportDesign> tailSupport;
+};
+
 struct Part {
     std::string id;
     PartKind kind = PartKind::Unknown;
@@ -66,6 +105,7 @@ struct Part {
     std::vector<Hardpoint> hardpoints;
     // 1部品が構造・駆動・艤装など複数の解析質量項目を担える。
     std::vector<MassNode> massNodes;
+    PartDesign design;
 };
 
 glm::dmat4 transformMatrix(const Transform3& transform);

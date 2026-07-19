@@ -33,6 +33,9 @@ private:
     bool applyVTailPreset(int preset, std::string& error);
     bool hasComponent(const std::string& key) const;
     bool toggleComponent(const std::string& key, std::string& error);
+    bool getPartDesign(BodyPart part, PartDesign& out) const;
+    bool applyPartDesign(BodyPart part, const PartDesign& design, std::string& error);
+    double estimatePartDesignMass(BodyPart part, const PartDesign& design) const;
     void setMode(const std::string& mode);
     void placeForMode();
     void startSim();

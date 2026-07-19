@@ -29,6 +29,9 @@ public:
         std::function<bool(int, std::string&)> applyVTailPreset;
         std::function<bool(const std::string&)> hasComponent;
         std::function<bool(const std::string&, std::string&)> toggleComponent;
+        std::function<bool(BodyPart, PartDesign&)> getDesign;
+        std::function<bool(BodyPart, const PartDesign&, std::string&)> applyDesign;
+        std::function<double(BodyPart, const PartDesign&)> estimateDesignMass;
     };
 
     // onChange: パラメータ変更時(機体再解析・再構築)
@@ -66,6 +69,7 @@ private:
     std::vector<int> sectionsForPart(BodyPart part) const;
     void updateDockRect(float W, float H);
     void loadMountEditor();
+    void loadDetailEditor();
     std::vector<std::string> componentKeys() const;
 
     AircraftParams* st_ = nullptr;
@@ -94,6 +98,10 @@ private:
     std::size_t mountTargetIndex_ = 0;
     bool mountEditable_ = false;
     std::string mountMessage_;
+    PartDesign pendingDesign_;
+    std::vector<Slider> detailSliders_;
+    Button detailChoice_, detailApply_, detailCancel_;
+    bool detailEditable_ = false;
 };
 
 } // namespace bm

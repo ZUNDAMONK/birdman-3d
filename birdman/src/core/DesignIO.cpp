@@ -140,6 +140,44 @@ std::string aircraftToJson(const AircraftParams& st, const AirframeGraph* layout
                 {"pos", vec3(hp.t.pos)}, {"rot", vec3(hp.t.rotDeg)}}));
         if (!hardpoints.array.empty()) encoded.object["hardpoints"] = std::move(hardpoints);
 
+        json::Value design = json::Value::objectValue();
+        if (part.design.spar) {
+            const SparDesign& value = *part.design.spar;
+            design.object["spar"] = json::Value::objectValue({
+                {"chordFrac", json::Value::numberValue(value.chordFrac)},
+                {"count", json::Value::numberValue(value.count)},
+                {"jointCount", json::Value::numberValue(value.jointCount)},
+                {"rootDiaMm", json::Value::numberValue(value.rootDiaMm)},
+                {"section", json::Value::stringValue(value.section)},
+                {"tipDiaMm", json::Value::numberValue(value.tipDiaMm)}});
+        }
+        if (part.design.fairing) {
+            const FairingDesign& value = *part.design.fairing;
+            design.object["fairing"] = json::Value::objectValue({
+                {"heightM", json::Value::numberValue(value.heightM)},
+                {"lengthM", json::Value::numberValue(value.lengthM)},
+                {"noseRatio", json::Value::numberValue(value.noseRatio)},
+                {"tailRatio", json::Value::numberValue(value.tailRatio)},
+                {"widthM", json::Value::numberValue(value.widthM)}});
+        }
+        if (part.design.pilot) {
+            const PilotStationDesign& value = *part.design.pilot;
+            design.object["pilot"] = json::Value::objectValue({
+                {"crankHeightM", json::Value::numberValue(value.crankHeightM)},
+                {"crankZM", json::Value::numberValue(value.crankZM)},
+                {"pedalHeightM", json::Value::numberValue(value.pedalHeightM)},
+                {"pedalZM", json::Value::numberValue(value.pedalZM)},
+                {"seatHeightM", json::Value::numberValue(value.seatHeightM)}});
+        }
+        if (part.design.tailSupport) {
+            const TailSupportDesign& value = *part.design.tailSupport;
+            design.object["tailSupport"] = json::Value::objectValue({
+                {"mounting", json::Value::stringValue(value.mounting)},
+                {"supportCount", json::Value::numberValue(value.supportCount)},
+                {"supportDiaMm", json::Value::numberValue(value.supportDiaMm)}});
+        }
+        if (!design.object.empty()) encoded.object["design"] = std::move(design);
+
         json::Value masses = json::Value::arrayValue();
         for (const auto& mass : part.massNodes) {
             json::Value inertia = json::Value::arrayValue();
@@ -196,6 +234,29 @@ std::string stringField(const json::Value* object, const char* key, const std::s
     if (!object || !object->isObject()) return fallback;
     const json::Value* value = object->find(key);
     return value && value->isString() ? value->string : fallback;
+}
+
+double numberField(const json::Value* object, const char* key, double fallback,
+                   AircraftJsonReport& report, const std::string& context) {
+    if (!object || !object->isObject()) return fallback;
+    const json::Value* value = object->find(key);
+    if (!value) return fallback;
+    if (!value->isNumber() || !std::isfinite(value->number)) {
+        addWarning(report, context + "." + key + " must be a finite number; using default");
+        return fallback;
+    }
+    return value->number;
+}
+
+int integerField(const json::Value* object, const char* key, int fallback,
+                 AircraftJsonReport& report, const std::string& context) {
+    const double value = numberField(object, key, fallback, report, context);
+    if (std::floor(value) != value || value < (double)std::numeric_limits<int>::min()
+        || value > (double)std::numeric_limits<int>::max()) {
+        addWarning(report, context + "." + key + " must be an integer; using default");
+        return fallback;
+    }
+    return (int)value;
 }
 
 glm::dvec3 vectorField(const json::Value* object, const char* key,
@@ -265,6 +326,51 @@ AirframeGraph parseLayout(const json::Value& layout, AircraftJsonReport& report)
                 hp.t.pos = vectorField(&hpSource, "pos", report, hpContext);
                 hp.t.rotDeg = vectorField(&hpSource, "rot", report, hpContext);
                 part.hardpoints.push_back(std::move(hp));
+            }
+        }
+
+        if (const json::Value* design = source.find("design")) {
+            if (!design->isObject()) addWarning(report, context + ".design must be an object");
+            else {
+                if (const json::Value* spec = design->find("spar")) {
+                    SparDesign value;
+                    const std::string where = context + ".design.spar";
+                    value.count = integerField(spec, "count", value.count, report, where);
+                    value.chordFrac = numberField(spec, "chordFrac", value.chordFrac, report, where);
+                    value.rootDiaMm = numberField(spec, "rootDiaMm", value.rootDiaMm, report, where);
+                    value.tipDiaMm = numberField(spec, "tipDiaMm", value.tipDiaMm, report, where);
+                    value.jointCount = integerField(spec, "jointCount", value.jointCount, report, where);
+                    value.section = stringField(spec, "section", value.section);
+                    part.design.spar = std::move(value);
+                }
+                if (const json::Value* spec = design->find("fairing")) {
+                    FairingDesign value;
+                    const std::string where = context + ".design.fairing";
+                    value.lengthM = numberField(spec, "lengthM", value.lengthM, report, where);
+                    value.widthM = numberField(spec, "widthM", value.widthM, report, where);
+                    value.heightM = numberField(spec, "heightM", value.heightM, report, where);
+                    value.noseRatio = numberField(spec, "noseRatio", value.noseRatio, report, where);
+                    value.tailRatio = numberField(spec, "tailRatio", value.tailRatio, report, where);
+                    part.design.fairing = std::move(value);
+                }
+                if (const json::Value* spec = design->find("pilot")) {
+                    PilotStationDesign value;
+                    const std::string where = context + ".design.pilot";
+                    value.seatHeightM = numberField(spec, "seatHeightM", value.seatHeightM, report, where);
+                    value.pedalZM = numberField(spec, "pedalZM", value.pedalZM, report, where);
+                    value.pedalHeightM = numberField(spec, "pedalHeightM", value.pedalHeightM, report, where);
+                    value.crankZM = numberField(spec, "crankZM", value.crankZM, report, where);
+                    value.crankHeightM = numberField(spec, "crankHeightM", value.crankHeightM, report, where);
+                    part.design.pilot = std::move(value);
+                }
+                if (const json::Value* spec = design->find("tailSupport")) {
+                    TailSupportDesign value;
+                    const std::string where = context + ".design.tailSupport";
+                    value.mounting = stringField(spec, "mounting", value.mounting);
+                    value.supportCount = integerField(spec, "supportCount", value.supportCount, report, where);
+                    value.supportDiaMm = numberField(spec, "supportDiaMm", value.supportDiaMm, report, where);
+                    part.design.tailSupport = std::move(value);
+                }
             }
         }
 
