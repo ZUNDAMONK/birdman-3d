@@ -613,6 +613,22 @@ DesignPhysicsProperties aggregateDesignPhysics(const AirframeGraph& graph,
     if (main && tail) result.gearType = "mono";
     else if (front && main) result.gearType = "tri";
     else result.gearType = "tandem";
+
+    double boomWeightedZ = 0.0;
+    for (const auto& instance : graph.resolve()) {
+        if (instance.part->kind != PartKind::BoomWing) continue;
+        const glm::dvec3 origin(instance.world[3]);
+        const glm::dmat3 rotation(instance.world);
+        const glm::dvec3 normal = glm::normalize(rotation * glm::dvec3(0.0, 1.0, 0.0));
+        if (!finiteVec(origin) || !finiteVec(normal)) { result.compositionValid = false; return result; }
+        // 各instanceは半翼。レンダラの0.65テーパと同じ平均翼弦率0.825を用いる。
+        const double area = 0.5 * st.boomWingSpan * st.boomWingChord * 0.825
+                          * std::abs(normal.y);
+        result.boomWingAreaM2 += area;
+        boomWeightedZ += area * origin.z;
+    }
+    result.boomWingZ = result.boomWingAreaM2 > 1e-12
+        ? boomWeightedZ / result.boomWingAreaM2 : 0.0;
     return result;
 }
 
@@ -623,6 +639,8 @@ AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an) {
     const double propH = st.propConfig == "pylon" ? hBoom + 0.9 : hBoom;
     const double zBeamRear = st.seatX + 0.55;
     const double boomWingZ = zBeamRear + (an.fusLen - zBeamRear) * st.boomWingPos;
+    const double boomWingKg = st.boomWing == "none" ? 0.0
+        : (st.boomWing == "LR" ? 2.0 : 1.0) * st.boomWingSpan * st.boomWingChord * 0.55 + 0.12;
 
     auto massAt = [&](int item, const glm::dmat4& world) {
         MassNode node;
@@ -690,7 +708,13 @@ AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an) {
         st.span * 0.5,
         std::tan(st.dihedral * 3.14159265358979323846 / 180.0) * st.span * 0.5,
         st.tipChord * 0.4}));
-    if (!addWithMass(std::move(wing), 0, root->hardpoints[0].t)) return {};
+    {
+        const glm::dmat4 world = transformMatrix(root->hardpoints[0].t);
+        MassNode wingMass = massAt(0, world);
+        wingMass.kg = std::max(0.0, wingMass.kg - boomWingKg);
+        wing.massNodes.push_back(wingMass);
+        if (!graph.addPart(std::move(wing))) return {};
+    }
     Part htail = child("tail.h", PartKind::HTail, "hp.tail.h");
     htail.design.tailSupport = TailSupportDesign{};
     htail.hardpoints.push_back(hp("hp.tip", {st.hSpan * 0.5, 0.0, st.hChord * 0.4}));
@@ -741,6 +765,14 @@ AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an) {
     if (st.boomWing != "none") {
         Part boomWing = child("boomwing", PartKind::BoomWing, "hp.boomwing");
         boomWing.mount.mirror = st.boomWing == "LR" ? MirrorMode::Pair : MirrorMode::None;
+        const auto hpIt = std::find_if(root->hardpoints.begin(), root->hardpoints.end(),
+            [](const Hardpoint& value) { return value.id == "hp.boomwing"; });
+        if (hpIt == root->hardpoints.end()) return {};
+        const glm::dmat4 world = transformMatrix(hpIt->t);
+        MassNode mass = massAt(0, world);
+        mass.kg = boomWing.mount.mirror == MirrorMode::Pair ? boomWingKg * 0.5 : boomWingKg;
+        mass.analysisItem = -1;
+        boomWing.massNodes.push_back(mass);
         if (!graph.addPart(std::move(boomWing))) return {};
     }
     return graph;

@@ -438,7 +438,8 @@ void defaultLayoutTests() {
         check(count == (mode == "LR" ? 2 : 1), "boomwing instance count: " + mode);
         double totalKg = 0.0;
         for (const auto& entry : graph.parts())
-            for (const auto& mass : entry.second.massNodes) totalKg += mass.kg;
+            for (const auto& mass : entry.second.massNodes)
+                totalKg += mass.kg * (entry.second.mount.mirror == bm::MirrorMode::Pair ? 2.0 : 1.0);
         check(near(totalKg, an.W, 1e-9), "boomwing layout mass total: " + mode);
     }
 

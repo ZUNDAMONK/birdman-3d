@@ -193,6 +193,8 @@ struct DesignPhysicsProperties {
     std::string gearType = "tandem";
     double pilotPowerFactor = 1.0;
     double pilotEnergyFactor = 1.0;
+    double boomWingAreaM2 = 0.0;
+    double boomWingZ = 0.0;
 };
 
 // 部品固有設計から梁解析用桁仕様と寄生抗力補正を集約する。

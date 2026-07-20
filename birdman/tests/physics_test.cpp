@@ -306,6 +306,53 @@ int main() {
     check(!gearlessDesign.hasGear && !gearlessC.hasGear,
           "custom aircraft graph controls landing gear physics");
 
+    // ---- Phase 0C-5: ブーム翼を独立質量・配置空力へ接続 ----
+    AircraftParams boomSt = st;
+    boomSt.boomWing = "LR";
+    boomSt.boomWingSpan = 1.4;
+    boomSt.boomWingChord = 0.34;
+    const Analysis boomA = analyze(boomSt);
+    const AirframeGraph boomLayout = buildDefaultLayout(boomSt, boomA);
+    const MassBreakdown boomMass = aggregateMass(boomLayout);
+    check(near(boomMass.totalKg, boomA.W, 1e-9)
+          && near(boomMass.cg.z, boomA.xCG, 1e-9),
+          "independent boom wing mass preserves default total mass and longitudinal CG");
+    const DesignPhysicsProperties boomDesign = aggregateDesignPhysics(boomLayout, boomSt);
+    const AircraftConstants boomC = aeroPackCustomDesign(
+        boomSt, boomA, prm, boomMass, boomMass,
+        aggregateAeroLayout(boomLayout), boomDesign);
+    check(boomDesign.boomWingAreaM2 > 0.0 && boomC.a.Sh > boomA.Sh,
+          "paired horizontal boom wing adds effective horizontal tail area");
+
+    AirframeGraph noBoom = boomLayout;
+    check(noBoom.removeSubtree("boomwing"), "physics fixture removes boom wing");
+    const MassBreakdown noBoomMass = aggregateMass(noBoom);
+    const AircraftConstants noBoomC = aeroPackCustomDesign(
+        boomSt, boomA, prm, noBoomMass, boomMass,
+        aggregateAeroLayout(noBoom), aggregateDesignPhysics(noBoom, boomSt));
+    check(noBoomMass.totalKg < boomMass.totalKg && near(noBoomC.a.Sh, boomA.Sh, 1e-12),
+          "removing boom wing removes both its mass and aerodynamic contribution");
+
+    AirframeGraph verticalBoom = boomLayout;
+    Part boomPart = *verticalBoom.find("boomwing");
+    boomPart.mount.offset.rotDeg.x = 90.0;
+    check(verticalBoom.replacePart("boomwing", boomPart),
+          "physics fixture rotates boom wing vertical");
+    const DesignPhysicsProperties verticalBoomDesign = aggregateDesignPhysics(verticalBoom, boomSt);
+    check(verticalBoomDesign.boomWingAreaM2 < boomDesign.boomWingAreaM2 * 1e-9,
+          "vertical boom wing has negligible horizontal projected area");
+
+    AirframeGraph rearBoom = boomLayout;
+    boomPart = *rearBoom.find("boomwing");
+    boomPart.mount.offset.pos.z += 1.0;
+    check(rearBoom.replacePart("boomwing", boomPart),
+          "physics fixture moves boom wing aft");
+    const AircraftConstants rearBoomC = aeroPackCustomDesign(
+        boomSt, boomA, prm, aggregateMass(rearBoom), boomMass,
+        aggregateAeroLayout(rearBoom), aggregateDesignPhysics(rearBoom, boomSt));
+    check(rearBoomC.a.Vh > boomC.a.Vh,
+          "moving boom wing aft increases effective horizontal tail volume");
+
     // ---- computePolar ----
     PolarResult pol = computePolar(st, a, prm);
     std::printf("[polar] Vs=%.3f  minP=%.1fW @%.1fm/s  L/Dmax=%.2f @%.1fm/s  Dp=%.2fN Di=%.2fN\n\n",

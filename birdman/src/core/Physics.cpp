@@ -263,6 +263,9 @@ static AircraftConstants aeroPackCustomImpl(const AircraftParams& st, const Anal
                 && std::isfinite(designPhysics->pilotEnergyFactor)
                 && designPhysics->pilotEnergyFactor >= 1.0
                 && designPhysics->pilotEnergyFactor <= 1.60
+                && std::isfinite(designPhysics->boomWingAreaM2)
+                && designPhysics->boomWingAreaM2 >= 0.0
+                && std::isfinite(designPhysics->boomWingZ)
                 && (designPhysics->gearType == "mono"
                     || designPhysics->gearType == "tri"
                     || designPhysics->gearType == "tandem"))));
@@ -295,6 +298,13 @@ static AircraftConstants aeroPackCustomImpl(const AircraftParams& st, const Anal
                            - designPhysics->fairingCdReduction;
         if (designPhysics->compositionValid)
             adjustedSt.gear = designPhysics->hasGear ? designPhysics->gearType : "none";
+        if (designPhysics->compositionValid && designPhysics->boomWingAreaM2 > 0.0) {
+            const double combinedArea = adjusted.Sh + designPhysics->boomWingAreaM2;
+            adjusted.xHT = (adjusted.Sh * adjusted.xHT
+                          + designPhysics->boomWingAreaM2 * designPhysics->boomWingZ)
+                         / combinedArea;
+            adjusted.Sh = combinedArea;
+        }
         double wingKg = 0.0;
         for (const auto& item : customMass.items)
             if (item.partId == "wing.main") wingKg += item.kg;

@@ -517,6 +517,12 @@ bool Game::toggleComponent(const std::string& key, std::string& error) {
                 part.mount.parentId = "fuselage";
                 part.mount.hardpointId = key == "boomwing" ? "hp.boomwing" : "hp.cockpit";
                 if (key == "boomwing") part.mount.mirror = MirrorMode::Pair;
+                if (key == "boomwing") {
+                    MassNode mass;
+                    const double total = 2.0 * st_.boomWingSpan * st_.boomWingChord * 0.55 + 0.12;
+                    mass.kg = total * 0.5;
+                    part.massNodes.push_back(mass);
+                }
                 if (key == "pilot") part.design.pilot = PilotStationDesign{};
                 if (key == "pilot") {
                     MassNode mass; mass.kg = st_.pilotW; mass.analysisItem = 10;
