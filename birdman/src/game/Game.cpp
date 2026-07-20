@@ -335,6 +335,15 @@ void Game::rebuildAircraft() {
             graph_ = buildDefaultLayout(st_, an_);
         }
     }
+    if (customLayout_) {
+        std::string migrationError;
+        if (!migrateLegacyBoomWingMass(graph_, st_, an_, &migrationError)) {
+            std::fprintf(stderr, "warning: %s; restoring the default aircraft\n", migrationError.c_str());
+            customLayout_ = false;
+            layoutUndo_.clear(); layoutRedo_.clear();
+            graph_ = buildDefaultLayout(st_, an_);
+        }
+    }
     r3d_.buildAircraft(st_, an_, graph_);
 }
 
@@ -600,7 +609,9 @@ double Game::estimatePartDesignMass(BodyPart part, const PartDesign& design) con
         const FairingDesign base;
         const double scale = value.lengthM * (value.widthM + value.heightM)
             / (base.lengthM * (base.widthM + base.heightM));
-        total += 1.1 * scale * (0.8 + 0.4 * value.tailRatio);
+        const double shape = (0.8 + 0.4 * value.tailRatio)
+                           / (0.8 + 0.4 * base.tailRatio);
+        total += 1.1 * scale * shape;
     }
     if (design.pilot) {
         const PilotStationDesign& value = *design.pilot;
@@ -629,7 +640,16 @@ bool Game::applyPartDesign(BodyPart part, const PartDesign& design, std::string&
         Part replacement = *current;
         replacement.design = value;
         double target = massKg;
-        if (!absoluteMass) target += an_.items[(std::size_t)analysisItem].w;
+        if (!absoluteMass) {
+            double baseMass = an_.items[(std::size_t)analysisItem].w;
+            if (analysisItem == 0 && st_.boomWing != "none") {
+                double independentBoomKg = 0.0;
+                for (const auto& item : aggregateMass(candidate).items)
+                    if (item.partId == "boomwing") independentBoomKg += item.kg;
+                baseMass = std::max(0.0, baseMass - independentBoomKg);
+            }
+            target += baseMass;
+        }
         setMass(replacement, analysisItem, target);
         return candidate.replacePart(id, std::move(replacement), &error);
     };

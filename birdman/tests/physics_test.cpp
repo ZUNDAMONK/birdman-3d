@@ -267,6 +267,16 @@ int main() {
           && near(ergonomicStandard.pilotEnergyFactor, 1.0, 1e-12),
           "default pilot station preserves legacy power and energy cost");
 
+    AirframeGraph legacyDesignLayout = standardLayout;
+    Part legacyDesignWing = *legacyDesignLayout.find("wing.main");
+    legacyDesignWing.design.spar.reset();
+    check(legacyDesignLayout.replacePart("wing.main", legacyDesignWing),
+          "physics fixture removes Phase 0B-era spar design");
+    const DesignPhysicsProperties migratedDesign = aggregateDesignPhysics(legacyDesignLayout, st);
+    check(migratedDesign.valid && migratedDesign.compositionValid
+          && near(migratedDesign.spar.rootDiaMm, st.rootDia, 1e-12),
+          "legacy custom layout without part design receives default spar physics");
+
     AirframeGraph strainedPilot = standardLayout;
     Part pilotPart = *strainedPilot.find("pilot");
     pilotPart.design.pilot->pedalZM -= 1.0;

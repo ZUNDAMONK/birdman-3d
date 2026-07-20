@@ -201,6 +201,10 @@ struct DesignPhysicsProperties {
     double boomWingZ = 0.0;
 };
 
+// Phase 0B形式（ブーム翼質量が主翼へ内包）のLayoutを独立質量形式へ決定的に移行する。
+bool migrateLegacyBoomWingMass(AirframeGraph& graph, const AircraftParams& st,
+                               const Analysis& an, std::string* error = nullptr);
+
 // 部品固有設計から梁解析用桁仕様と寄生抗力補正を集約する。
 DesignPhysicsProperties aggregateDesignPhysics(const AirframeGraph& graph);
 // 姿勢別の標準操縦席を基準に、部品構成と人間工学係数も集約する。

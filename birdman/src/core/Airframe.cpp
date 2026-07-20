@@ -490,6 +490,51 @@ void applyBoomWingMassDistribution(MassNode& node, const AircraftParams& st, int
     node.I0[2][2] += node.kg * varianceX;
 }
 
+bool migrateLegacyBoomWingMass(AirframeGraph& graph, const AircraftParams& st,
+                               const Analysis& an, std::string* error) {
+    const Part* boomCurrent = graph.find("boomwing");
+    if (!boomCurrent || !boomCurrent->massNodes.empty()) return true;
+    const Part* wingCurrent = graph.find("wing.main");
+    if (!wingCurrent || an.items.empty()) {
+        if (error) *error = "legacy boom wing mass carrier is missing";
+        return false;
+    }
+    const double panels = boomCurrent->mount.mirror == MirrorMode::Pair ? 2.0 : 1.0;
+    const double totalKg = panels * st.boomWingSpan * st.boomWingChord * 0.55 + 0.12;
+    Part wing = *wingCurrent;
+    auto carrier = std::find_if(wing.massNodes.begin(), wing.massNodes.end(),
+        [](const MassNode& node) { return node.analysisItem == 0; });
+    if (carrier == wing.massNodes.end() || carrier->kg + 1e-9 < totalKg) {
+        if (error) *error = "legacy boom wing mass cannot be split from wing";
+        return false;
+    }
+    carrier->kg = std::max(0.0, carrier->kg - totalKg);
+
+    const auto placed = graph.resolve();
+    const auto placement = std::find_if(placed.begin(), placed.end(),
+        [](const AirframeGraph::Placed& value) {
+            return value.part->id == "boomwing" && !value.mirrored;
+        });
+    if (placement == placed.end()) {
+        if (error) *error = "legacy boom wing placement cannot be resolved";
+        return false;
+    }
+    Part boom = *boomCurrent;
+    MassNode mass;
+    mass.kg = boom.mount.mirror == MirrorMode::Pair ? totalKg * 0.5 : totalKg;
+    const glm::dvec3 origin(placement->world[3]);
+    const glm::dvec3 target{origin.x, origin.y, an.items[0].x};
+    mass.cgLocal = glm::dvec3(glm::inverse(placement->world) * glm::dvec4(target, 1.0));
+    applyBoomWingMassDistribution(mass, st, st.boomWing == "R" ? -1 : 1);
+    boom.massNodes.push_back(mass);
+
+    AirframeGraph candidate = graph;
+    if (!candidate.replacePart("wing.main", std::move(wing), error)) return false;
+    if (!candidate.replacePart("boomwing", std::move(boom), error)) return false;
+    graph = std::move(candidate);
+    return true;
+}
+
 AeroLayoutProperties aggregateAeroLayout(const AirframeGraph& graph) {
     AeroLayoutProperties result;
     const auto placed = graph.resolve();
@@ -580,6 +625,17 @@ DesignPhysicsProperties aggregateDesignPhysics(const AirframeGraph& graph) {
 DesignPhysicsProperties aggregateDesignPhysics(const AirframeGraph& graph,
                                                const AircraftParams& st) {
     DesignPhysicsProperties result = aggregateDesignPhysics(graph);
+    if (!result.valid) {
+        const Part* currentWing = graph.find("wing.main");
+        if (currentWing && !currentWing->design.spar) {
+            AirframeGraph upgraded = graph;
+            Part wing = *currentWing;
+            wing.design.spar = SparDesign{1, 0.30, st.rootDia, st.tipDia,
+                                          std::max(0, st.segments - 1), "tube"};
+            if (upgraded.replacePart("wing.main", std::move(wing)))
+                result = aggregateDesignPhysics(upgraded);
+        }
+    }
     if (!result.valid) return result;
 
     result.compositionValid = true;
