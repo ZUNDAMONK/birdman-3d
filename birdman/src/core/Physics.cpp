@@ -263,6 +263,11 @@ static AircraftConstants aeroPackCustomImpl(const AircraftParams& st, const Anal
                 && std::isfinite(designPhysics->pilotEnergyFactor)
                 && designPhysics->pilotEnergyFactor >= 1.0
                 && designPhysics->pilotEnergyFactor <= 1.60
+                && std::isfinite(designPhysics->boomWingAreaM2)
+                && designPhysics->boomWingAreaM2 >= 0.0
+                && std::isfinite(designPhysics->boomWingDragAreaM2)
+                && designPhysics->boomWingDragAreaM2 >= 0.0
+                && std::isfinite(designPhysics->boomWingZ)
                 && (designPhysics->gearType == "mono"
                     || designPhysics->gearType == "tri"
                     || designPhysics->gearType == "tandem"))));
@@ -291,10 +296,18 @@ static AircraftConstants aeroPackCustomImpl(const AircraftParams& st, const Anal
         adjustedSt.segments = designPhysics->spar.jointCount + 1;
         // カスタム経路ではグラフ上のフェアリングを真実の源とし、固定補正を置換する。
         adjustedSt.fairing = false;
-        adjustedSt.cd0Add += designPhysics->supportDragAreaM2 / adjusted.S
+        adjustedSt.cd0Add += (designPhysics->supportDragAreaM2
+                           + designPhysics->boomWingDragAreaM2) / adjusted.S
                            - designPhysics->fairingCdReduction;
         if (designPhysics->compositionValid)
             adjustedSt.gear = designPhysics->hasGear ? designPhysics->gearType : "none";
+        if (designPhysics->compositionValid && designPhysics->boomWingAreaM2 > 0.0) {
+            const double combinedArea = adjusted.Sh + designPhysics->boomWingAreaM2;
+            adjusted.xHT = (adjusted.Sh * adjusted.xHT
+                          + designPhysics->boomWingAreaM2 * designPhysics->boomWingZ)
+                         / combinedArea;
+            adjusted.Sh = combinedArea;
+        }
         double wingKg = 0.0;
         for (const auto& item : customMass.items)
             if (item.partId == "wing.main") wingKg += item.kg;

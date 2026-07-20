@@ -475,6 +475,66 @@ MassBreakdown aggregateMass(const AirframeGraph& graph) {
     return result;
 }
 
+void applyBoomWingMassDistribution(MassNode& node, const AircraftParams& st, int side) {
+    const double halfSpan = std::max(0.0, st.boomWingSpan * 0.5);
+    const double rootChord = std::max(0.0, st.boomWingChord);
+    const double tipChord = rootChord * 0.65;
+    const double chordSum = rootChord + tipChord;
+    if (node.kg <= 0.0 || halfSpan <= 0.0 || chordSum <= 0.0) return;
+    const double meanX = halfSpan * (rootChord + 2.0 * tipChord) / (3.0 * chordSum);
+    const double meanX2 = halfSpan * halfSpan * 2.0
+        * (rootChord / 3.0 - (rootChord - tipChord) / 4.0) / chordSum;
+    const double varianceX = std::max(0.0, meanX2 - meanX * meanX);
+    node.cgLocal.x = (side < 0 ? -1.0 : 1.0) * meanX;
+    node.I0[1][1] += node.kg * varianceX;
+    node.I0[2][2] += node.kg * varianceX;
+}
+
+bool migrateLegacyBoomWingMass(AirframeGraph& graph, const AircraftParams& st,
+                               const Analysis& an, std::string* error) {
+    const Part* boomCurrent = graph.find("boomwing");
+    if (!boomCurrent || !boomCurrent->massNodes.empty()) return true;
+    const Part* wingCurrent = graph.find("wing.main");
+    if (!wingCurrent || an.items.empty()) {
+        if (error) *error = "legacy boom wing mass carrier is missing";
+        return false;
+    }
+    const double panels = boomCurrent->mount.mirror == MirrorMode::Pair ? 2.0 : 1.0;
+    const double totalKg = panels * st.boomWingSpan * st.boomWingChord * 0.55 + 0.12;
+    Part wing = *wingCurrent;
+    auto carrier = std::find_if(wing.massNodes.begin(), wing.massNodes.end(),
+        [](const MassNode& node) { return node.analysisItem == 0; });
+    if (carrier == wing.massNodes.end() || carrier->kg + 1e-9 < totalKg) {
+        if (error) *error = "legacy boom wing mass cannot be split from wing";
+        return false;
+    }
+    carrier->kg = std::max(0.0, carrier->kg - totalKg);
+
+    const auto placed = graph.resolve();
+    const auto placement = std::find_if(placed.begin(), placed.end(),
+        [](const AirframeGraph::Placed& value) {
+            return value.part->id == "boomwing" && !value.mirrored;
+        });
+    if (placement == placed.end()) {
+        if (error) *error = "legacy boom wing placement cannot be resolved";
+        return false;
+    }
+    Part boom = *boomCurrent;
+    MassNode mass;
+    mass.kg = boom.mount.mirror == MirrorMode::Pair ? totalKg * 0.5 : totalKg;
+    const glm::dvec3 origin(placement->world[3]);
+    const glm::dvec3 target{origin.x, origin.y, an.items[0].x};
+    mass.cgLocal = glm::dvec3(glm::inverse(placement->world) * glm::dvec4(target, 1.0));
+    applyBoomWingMassDistribution(mass, st, st.boomWing == "R" ? -1 : 1);
+    boom.massNodes.push_back(mass);
+
+    AirframeGraph candidate = graph;
+    if (!candidate.replacePart("wing.main", std::move(wing), error)) return false;
+    if (!candidate.replacePart("boomwing", std::move(boom), error)) return false;
+    graph = std::move(candidate);
+    return true;
+}
+
 AeroLayoutProperties aggregateAeroLayout(const AirframeGraph& graph) {
     AeroLayoutProperties result;
     const auto placed = graph.resolve();
@@ -565,6 +625,17 @@ DesignPhysicsProperties aggregateDesignPhysics(const AirframeGraph& graph) {
 DesignPhysicsProperties aggregateDesignPhysics(const AirframeGraph& graph,
                                                const AircraftParams& st) {
     DesignPhysicsProperties result = aggregateDesignPhysics(graph);
+    if (!result.valid) {
+        const Part* currentWing = graph.find("wing.main");
+        if (currentWing && !currentWing->design.spar) {
+            AirframeGraph upgraded = graph;
+            Part wing = *currentWing;
+            wing.design.spar = SparDesign{1, 0.30, st.rootDia, st.tipDia,
+                                          std::max(0, st.segments - 1), "tube"};
+            if (upgraded.replacePart("wing.main", std::move(wing)))
+                result = aggregateDesignPhysics(upgraded);
+        }
+    }
     if (!result.valid) return result;
 
     result.compositionValid = true;
@@ -613,6 +684,23 @@ DesignPhysicsProperties aggregateDesignPhysics(const AirframeGraph& graph,
     if (main && tail) result.gearType = "mono";
     else if (front && main) result.gearType = "tri";
     else result.gearType = "tandem";
+
+    double boomWeightedZ = 0.0;
+    for (const auto& instance : graph.resolve()) {
+        if (instance.part->kind != PartKind::BoomWing) continue;
+        const glm::dvec3 origin(instance.world[3]);
+        const glm::dmat3 rotation(instance.world);
+        const glm::dvec3 normal = glm::normalize(rotation * glm::dvec3(0.0, 1.0, 0.0));
+        if (!finiteVec(origin) || !finiteVec(normal)) { result.compositionValid = false; return result; }
+        // 各instanceは半翼。レンダラの0.65テーパと同じ平均翼弦率0.825を用いる。
+        const double planform = 0.5 * st.boomWingSpan * st.boomWingChord * 0.825;
+        const double area = planform * std::abs(normal.y);
+        result.boomWingAreaM2 += area;
+        result.boomWingDragAreaM2 += planform * (0.012 + 1.10 * normal.z * normal.z);
+        boomWeightedZ += area * origin.z;
+    }
+    result.boomWingZ = result.boomWingAreaM2 > 1e-12
+        ? boomWeightedZ / result.boomWingAreaM2 : 0.0;
     return result;
 }
 
@@ -623,6 +711,8 @@ AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an) {
     const double propH = st.propConfig == "pylon" ? hBoom + 0.9 : hBoom;
     const double zBeamRear = st.seatX + 0.55;
     const double boomWingZ = zBeamRear + (an.fusLen - zBeamRear) * st.boomWingPos;
+    const double boomWingKg = st.boomWing == "none" ? 0.0
+        : (st.boomWing == "LR" ? 2.0 : 1.0) * st.boomWingSpan * st.boomWingChord * 0.55 + 0.12;
 
     auto massAt = [&](int item, const glm::dmat4& world) {
         MassNode node;
@@ -690,7 +780,13 @@ AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an) {
         st.span * 0.5,
         std::tan(st.dihedral * 3.14159265358979323846 / 180.0) * st.span * 0.5,
         st.tipChord * 0.4}));
-    if (!addWithMass(std::move(wing), 0, root->hardpoints[0].t)) return {};
+    {
+        const glm::dmat4 world = transformMatrix(root->hardpoints[0].t);
+        MassNode wingMass = massAt(0, world);
+        wingMass.kg = std::max(0.0, wingMass.kg - boomWingKg);
+        wing.massNodes.push_back(wingMass);
+        if (!graph.addPart(std::move(wing))) return {};
+    }
     Part htail = child("tail.h", PartKind::HTail, "hp.tail.h");
     htail.design.tailSupport = TailSupportDesign{};
     htail.hardpoints.push_back(hp("hp.tip", {st.hSpan * 0.5, 0.0, st.hChord * 0.4}));
@@ -741,6 +837,15 @@ AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an) {
     if (st.boomWing != "none") {
         Part boomWing = child("boomwing", PartKind::BoomWing, "hp.boomwing");
         boomWing.mount.mirror = st.boomWing == "LR" ? MirrorMode::Pair : MirrorMode::None;
+        const auto hpIt = std::find_if(root->hardpoints.begin(), root->hardpoints.end(),
+            [](const Hardpoint& value) { return value.id == "hp.boomwing"; });
+        if (hpIt == root->hardpoints.end()) return {};
+        const glm::dmat4 world = transformMatrix(hpIt->t);
+        MassNode mass = massAt(0, world);
+        mass.kg = boomWing.mount.mirror == MirrorMode::Pair ? boomWingKg * 0.5 : boomWingKg;
+        mass.analysisItem = -1;
+        applyBoomWingMassDistribution(mass, st, st.boomWing == "R" ? -1 : 1);
+        boomWing.massNodes.push_back(mass);
         if (!graph.addPart(std::move(boomWing))) return {};
     }
     return graph;

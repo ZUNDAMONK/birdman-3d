@@ -438,9 +438,46 @@ void defaultLayoutTests() {
         check(count == (mode == "LR" ? 2 : 1), "boomwing instance count: " + mode);
         double totalKg = 0.0;
         for (const auto& entry : graph.parts())
-            for (const auto& mass : entry.second.massNodes) totalKg += mass.kg;
+            for (const auto& mass : entry.second.massNodes)
+                totalKg += mass.kg * (entry.second.mount.mirror == bm::MirrorMode::Pair ? 2.0 : 1.0);
         check(near(totalKg, an.W, 1e-9), "boomwing layout mass total: " + mode);
+        const bm::Part* boomPart = graph.find("boomwing");
+        check(boomPart && !boomPart->massNodes.empty()
+              && boomPart->massNodes.front().I0[2][2] > 0.0,
+              "boomwing carries spanwise yaw/roll inertia: " + mode);
+        const bm::MassBreakdown distributed = bm::aggregateMass(graph);
+        std::vector<double> boomX;
+        for (const auto& item : distributed.items)
+            if (item.partId == "boomwing") boomX.push_back(item.cgWorld.x);
+        if (mode == "L") check(boomX.size() == 1 && boomX[0] > 0.0,
+                                "left boomwing has off-center mass CG");
+        if (mode == "R") check(boomX.size() == 1 && boomX[0] < 0.0,
+                                "right boomwing has off-center mass CG");
+        if (mode == "LR") check(boomX.size() == 2 && near(boomX[0], -boomX[1], 1e-12)
+                                 && near(distributed.cg.x, 0.0, 1e-12),
+                                 "paired boomwing mass CG mirrors about centerline");
     }
+
+    st.boomWing = "LR";
+    const bm::Analysis legacyBoomAnalysis = bm::analyze(st);
+    bm::AirframeGraph legacyBoom = bm::buildDefaultLayout(st, legacyBoomAnalysis);
+    bm::Part legacyWing = *legacyBoom.find("wing.main");
+    bm::Part legacyBoomPart = *legacyBoom.find("boomwing");
+    double splitKg = 0.0;
+    for (const auto& node : legacyBoomPart.massNodes) splitKg += node.kg * 2.0;
+    for (auto& node : legacyWing.massNodes)
+        if (node.analysisItem == 0) node.kg += splitKg;
+    legacyBoomPart.massNodes.clear();
+    check(legacyBoom.replacePart("wing.main", legacyWing)
+          && legacyBoom.replacePart("boomwing", legacyBoomPart),
+          "legacy boomwing fixture restores Phase 0B embedded mass");
+    check(bm::migrateLegacyBoomWingMass(legacyBoom, st, legacyBoomAnalysis),
+          "legacy boomwing mass migrates to independent component");
+    const bm::MassBreakdown migratedBoom = bm::aggregateMass(legacyBoom);
+    check(legacyBoom.find("boomwing") && !legacyBoom.find("boomwing")->massNodes.empty()
+          && near(migratedBoom.totalKg, legacyBoomAnalysis.W, 1e-9)
+          && near(migratedBoom.cg.z, legacyBoomAnalysis.xCG, 1e-9),
+          "legacy boomwing migration preserves total mass and longitudinal CG");
 
     // Phase 0B-4 connection presets: the stable tip hardpoints allow a single
     // vertical-tail part to describe either twin-tail or wingtip-tail pairs.

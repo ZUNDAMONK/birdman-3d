@@ -60,6 +60,9 @@ struct MassNode {
     int analysisItem = -1;
 };
 
+// 台形半翼の面積重心とスパン方向分布慣性を既存の質量ノードへ設定する。
+void applyBoomWingMassDistribution(MassNode& node, const AircraftParams& st, int side);
+
 struct SparDesign {
     int count = 1;
     double chordFrac = 0.30;
@@ -193,7 +196,14 @@ struct DesignPhysicsProperties {
     std::string gearType = "tandem";
     double pilotPowerFactor = 1.0;
     double pilotEnergyFactor = 1.0;
+    double boomWingAreaM2 = 0.0;
+    double boomWingDragAreaM2 = 0.0;
+    double boomWingZ = 0.0;
 };
+
+// Phase 0B形式（ブーム翼質量が主翼へ内包）のLayoutを独立質量形式へ決定的に移行する。
+bool migrateLegacyBoomWingMass(AirframeGraph& graph, const AircraftParams& st,
+                               const Analysis& an, std::string* error = nullptr);
 
 // 部品固有設計から梁解析用桁仕様と寄生抗力補正を集約する。
 DesignPhysicsProperties aggregateDesignPhysics(const AirframeGraph& graph);

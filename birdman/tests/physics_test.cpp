@@ -267,6 +267,16 @@ int main() {
           && near(ergonomicStandard.pilotEnergyFactor, 1.0, 1e-12),
           "default pilot station preserves legacy power and energy cost");
 
+    AirframeGraph legacyDesignLayout = standardLayout;
+    Part legacyDesignWing = *legacyDesignLayout.find("wing.main");
+    legacyDesignWing.design.spar.reset();
+    check(legacyDesignLayout.replacePart("wing.main", legacyDesignWing),
+          "physics fixture removes Phase 0B-era spar design");
+    const DesignPhysicsProperties migratedDesign = aggregateDesignPhysics(legacyDesignLayout, st);
+    check(migratedDesign.valid && migratedDesign.compositionValid
+          && near(migratedDesign.spar.rootDiaMm, st.rootDia, 1e-12),
+          "legacy custom layout without part design receives default spar physics");
+
     AirframeGraph strainedPilot = standardLayout;
     Part pilotPart = *strainedPilot.find("pilot");
     pilotPart.design.pilot->pedalZM -= 1.0;
@@ -305,6 +315,60 @@ int main() {
         aggregateAeroLayout(gearless), gearlessDesign);
     check(!gearlessDesign.hasGear && !gearlessC.hasGear,
           "custom aircraft graph controls landing gear physics");
+
+    // ---- Phase 0C-5: ブーム翼を独立質量・配置空力へ接続 ----
+    AircraftParams boomSt = st;
+    boomSt.boomWing = "LR";
+    boomSt.boomWingSpan = 1.4;
+    boomSt.boomWingChord = 0.34;
+    const Analysis boomA = analyze(boomSt);
+    const AirframeGraph boomLayout = buildDefaultLayout(boomSt, boomA);
+    const MassBreakdown boomMass = aggregateMass(boomLayout);
+    check(near(boomMass.totalKg, boomA.W, 1e-9)
+          && near(boomMass.cg.z, boomA.xCG, 1e-9),
+          "independent boom wing mass preserves default total mass and longitudinal CG");
+    const DesignPhysicsProperties boomDesign = aggregateDesignPhysics(boomLayout, boomSt);
+    const AircraftConstants boomC = aeroPackCustomDesign(
+        boomSt, boomA, prm, boomMass, boomMass,
+        aggregateAeroLayout(boomLayout), boomDesign);
+    check(boomDesign.boomWingAreaM2 > 0.0 && boomC.a.Sh > boomA.Sh,
+          "paired horizontal boom wing adds effective horizontal tail area");
+
+    AirframeGraph noBoom = boomLayout;
+    check(noBoom.removeSubtree("boomwing"), "physics fixture removes boom wing");
+    const MassBreakdown noBoomMass = aggregateMass(noBoom);
+    const AircraftConstants noBoomC = aeroPackCustomDesign(
+        boomSt, boomA, prm, noBoomMass, boomMass,
+        aggregateAeroLayout(noBoom), aggregateDesignPhysics(noBoom, boomSt));
+    check(noBoomMass.totalKg < boomMass.totalKg && near(noBoomC.a.Sh, boomA.Sh, 1e-12),
+          "removing boom wing removes both its mass and aerodynamic contribution");
+    check(boomC.CD0 > noBoomC.CD0,
+          "horizontal boom wing adds profile drag");
+
+    AirframeGraph verticalBoom = boomLayout;
+    Part boomPart = *verticalBoom.find("boomwing");
+    boomPart.mount.offset.rotDeg.x = 90.0;
+    check(verticalBoom.replacePart("boomwing", boomPart),
+          "physics fixture rotates boom wing vertical");
+    const DesignPhysicsProperties verticalBoomDesign = aggregateDesignPhysics(verticalBoom, boomSt);
+    check(verticalBoomDesign.boomWingAreaM2 < boomDesign.boomWingAreaM2 * 1e-9,
+          "vertical boom wing has negligible horizontal projected area");
+    const AircraftConstants verticalBoomC = aeroPackCustomDesign(
+        boomSt, boomA, prm, aggregateMass(verticalBoom), boomMass,
+        aggregateAeroLayout(verticalBoom), verticalBoomDesign);
+    check(verticalBoomC.CD0 > boomC.CD0,
+          "boom wing facing the airflow adds pressure drag");
+
+    AirframeGraph rearBoom = boomLayout;
+    boomPart = *rearBoom.find("boomwing");
+    boomPart.mount.offset.pos.z += 1.0;
+    check(rearBoom.replacePart("boomwing", boomPart),
+          "physics fixture moves boom wing aft");
+    const AircraftConstants rearBoomC = aeroPackCustomDesign(
+        boomSt, boomA, prm, aggregateMass(rearBoom), boomMass,
+        aggregateAeroLayout(rearBoom), aggregateDesignPhysics(rearBoom, boomSt));
+    check(rearBoomC.a.Vh > boomC.a.Vh,
+          "moving boom wing aft increases effective horizontal tail volume");
 
     // ---- computePolar ----
     PolarResult pol = computePolar(st, a, prm);
