@@ -490,11 +490,20 @@ bool Game::toggleComponent(const std::string& key, std::string& error) {
     } else {
         const AirframeGraph defaults = buildDefaultLayout(st_, an_);
         auto add = [&](Part part) {
-            if (candidate.addPart(part, &error)) return true;
-            // A custom graph may already carry the same analysis mass item on
-            // another part. Component composition is visual in Phase 0B, so a
-            // massless copy remains valid until the dedicated physics phase.
-            part.massNodes.clear();
+            // Optional analysis items may be parked on the fuselage with zero mass.
+            // Transfer ownership atomically instead of silently making the new part massless.
+            for (const MassNode& node : part.massNodes) {
+                if (node.analysisItem < 0) continue;
+                for (const auto& entry : candidate.parts()) {
+                    Part owner = entry.second;
+                    const auto oldSize = owner.massNodes.size();
+                    owner.massNodes.erase(std::remove_if(owner.massNodes.begin(), owner.massNodes.end(),
+                        [&](const MassNode& value) { return value.analysisItem == node.analysisItem; }),
+                        owner.massNodes.end());
+                    if (owner.massNodes.size() != oldSize
+                        && !candidate.replacePart(entry.first, std::move(owner), &error)) return false;
+                }
+            }
             return candidate.addPart(std::move(part), &error);
         };
         if (key == "pilot" || key == "fairing" || key == "boomwing") {
@@ -509,7 +518,15 @@ bool Game::toggleComponent(const std::string& key, std::string& error) {
                 part.mount.hardpointId = key == "boomwing" ? "hp.boomwing" : "hp.cockpit";
                 if (key == "boomwing") part.mount.mirror = MirrorMode::Pair;
                 if (key == "pilot") part.design.pilot = PilotStationDesign{};
-                if (key == "fairing") part.design.fairing = FairingDesign{};
+                if (key == "pilot") {
+                    MassNode mass; mass.kg = st_.pilotW; mass.analysisItem = 10;
+                    part.massNodes.push_back(mass);
+                }
+                if (key == "fairing") {
+                    part.design.fairing = FairingDesign{};
+                    MassNode mass; mass.kg = 1.1; mass.analysisItem = 8;
+                    part.massNodes.push_back(mass);
+                }
                 if (!add(std::move(part))) return false;
             }
         } else {
@@ -525,6 +542,10 @@ bool Game::toggleComponent(const std::string& key, std::string& error) {
                     Part gear;
                     gear.id = spec.first; gear.kind = PartKind::Gear;
                     gear.mount.parentId = "fuselage"; gear.mount.hardpointId = spec.second;
+                    if (std::string(spec.first) == "gear.front") {
+                        MassNode mass; mass.kg = 0.9; mass.analysisItem = 7;
+                        gear.massNodes.push_back(mass);
+                    }
                     if (!add(std::move(gear))) return false;
                 }
             }
@@ -718,7 +739,7 @@ void Game::startSim() {
         const MassBreakdown customMass = aggregateMass(graph_);
         const MassBreakdown referenceMass = aggregateMass(buildDefaultLayout(st_, an_));
         const AeroLayoutProperties aeroLayout = aggregateAeroLayout(graph_);
-        const DesignPhysicsProperties designPhysics = aggregateDesignPhysics(graph_);
+        const DesignPhysicsProperties designPhysics = aggregateDesignPhysics(graph_, st_);
         liveC_ = aeroPackCustomDesign(st_, an_, prm_, customMass, referenceMass,
                                       aeroLayout, designPhysics);
     } else {
