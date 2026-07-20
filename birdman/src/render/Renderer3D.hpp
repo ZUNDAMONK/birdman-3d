@@ -105,7 +105,6 @@ private:
     void drawLakeAndGrid(const glm::dvec3& camPos);
     void drawFx();
     void buildFunPlane();
-    void drawGulls();                  // 水面上を旋回するカモメ(tickFxで時刻を進める)
     std::string site_ = "biwa";
     unsigned envList_ = 0, designList_ = 0;
     unsigned acOpaque_ = 0, acFilm_ = 0, propList_ = 0;
@@ -124,7 +123,6 @@ private:
     std::vector<glm::dvec3> windPts_;   // 風可視化粒子(ワールド座標)
     std::vector<CrashRing> ripples_;    // 地面効果さざ波
     double rippleTimer_ = 0;
-    double gullT_ = 0;                  // カモメ周回の経過時間
     glm::dvec3 colPos_{0,0,0};
     double colLife_ = 0, colT_ = 0;
 };
