@@ -521,6 +521,7 @@ bool Game::toggleComponent(const std::string& key, std::string& error) {
                     MassNode mass;
                     const double total = 2.0 * st_.boomWingSpan * st_.boomWingChord * 0.55 + 0.12;
                     mass.kg = total * 0.5;
+                    applyBoomWingMassDistribution(mass, st_, 1);
                     part.massNodes.push_back(mass);
                 }
                 if (key == "pilot") part.design.pilot = PilotStationDesign{};

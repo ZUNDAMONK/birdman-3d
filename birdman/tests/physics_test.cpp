@@ -332,6 +332,8 @@ int main() {
         aggregateAeroLayout(noBoom), aggregateDesignPhysics(noBoom, boomSt));
     check(noBoomMass.totalKg < boomMass.totalKg && near(noBoomC.a.Sh, boomA.Sh, 1e-12),
           "removing boom wing removes both its mass and aerodynamic contribution");
+    check(boomC.CD0 > noBoomC.CD0,
+          "horizontal boom wing adds profile drag");
 
     AirframeGraph verticalBoom = boomLayout;
     Part boomPart = *verticalBoom.find("boomwing");
@@ -341,6 +343,11 @@ int main() {
     const DesignPhysicsProperties verticalBoomDesign = aggregateDesignPhysics(verticalBoom, boomSt);
     check(verticalBoomDesign.boomWingAreaM2 < boomDesign.boomWingAreaM2 * 1e-9,
           "vertical boom wing has negligible horizontal projected area");
+    const AircraftConstants verticalBoomC = aeroPackCustomDesign(
+        boomSt, boomA, prm, aggregateMass(verticalBoom), boomMass,
+        aggregateAeroLayout(verticalBoom), verticalBoomDesign);
+    check(verticalBoomC.CD0 > boomC.CD0,
+          "boom wing facing the airflow adds pressure drag");
 
     AirframeGraph rearBoom = boomLayout;
     boomPart = *rearBoom.find("boomwing");

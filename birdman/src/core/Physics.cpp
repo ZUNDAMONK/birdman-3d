@@ -265,6 +265,8 @@ static AircraftConstants aeroPackCustomImpl(const AircraftParams& st, const Anal
                 && designPhysics->pilotEnergyFactor <= 1.60
                 && std::isfinite(designPhysics->boomWingAreaM2)
                 && designPhysics->boomWingAreaM2 >= 0.0
+                && std::isfinite(designPhysics->boomWingDragAreaM2)
+                && designPhysics->boomWingDragAreaM2 >= 0.0
                 && std::isfinite(designPhysics->boomWingZ)
                 && (designPhysics->gearType == "mono"
                     || designPhysics->gearType == "tri"
@@ -294,7 +296,8 @@ static AircraftConstants aeroPackCustomImpl(const AircraftParams& st, const Anal
         adjustedSt.segments = designPhysics->spar.jointCount + 1;
         // カスタム経路ではグラフ上のフェアリングを真実の源とし、固定補正を置換する。
         adjustedSt.fairing = false;
-        adjustedSt.cd0Add += designPhysics->supportDragAreaM2 / adjusted.S
+        adjustedSt.cd0Add += (designPhysics->supportDragAreaM2
+                           + designPhysics->boomWingDragAreaM2) / adjusted.S
                            - designPhysics->fairingCdReduction;
         if (designPhysics->compositionValid)
             adjustedSt.gear = designPhysics->hasGear ? designPhysics->gearType : "none";

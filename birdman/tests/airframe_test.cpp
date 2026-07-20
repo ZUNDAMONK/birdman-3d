@@ -441,6 +441,21 @@ void defaultLayoutTests() {
             for (const auto& mass : entry.second.massNodes)
                 totalKg += mass.kg * (entry.second.mount.mirror == bm::MirrorMode::Pair ? 2.0 : 1.0);
         check(near(totalKg, an.W, 1e-9), "boomwing layout mass total: " + mode);
+        const bm::Part* boomPart = graph.find("boomwing");
+        check(boomPart && !boomPart->massNodes.empty()
+              && boomPart->massNodes.front().I0[2][2] > 0.0,
+              "boomwing carries spanwise yaw/roll inertia: " + mode);
+        const bm::MassBreakdown distributed = bm::aggregateMass(graph);
+        std::vector<double> boomX;
+        for (const auto& item : distributed.items)
+            if (item.partId == "boomwing") boomX.push_back(item.cgWorld.x);
+        if (mode == "L") check(boomX.size() == 1 && boomX[0] > 0.0,
+                                "left boomwing has off-center mass CG");
+        if (mode == "R") check(boomX.size() == 1 && boomX[0] < 0.0,
+                                "right boomwing has off-center mass CG");
+        if (mode == "LR") check(boomX.size() == 2 && near(boomX[0], -boomX[1], 1e-12)
+                                 && near(distributed.cg.x, 0.0, 1e-12),
+                                 "paired boomwing mass CG mirrors about centerline");
     }
 
     // Phase 0B-4 connection presets: the stable tip hardpoints allow a single

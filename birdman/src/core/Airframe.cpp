@@ -475,6 +475,21 @@ MassBreakdown aggregateMass(const AirframeGraph& graph) {
     return result;
 }
 
+void applyBoomWingMassDistribution(MassNode& node, const AircraftParams& st, int side) {
+    const double halfSpan = std::max(0.0, st.boomWingSpan * 0.5);
+    const double rootChord = std::max(0.0, st.boomWingChord);
+    const double tipChord = rootChord * 0.65;
+    const double chordSum = rootChord + tipChord;
+    if (node.kg <= 0.0 || halfSpan <= 0.0 || chordSum <= 0.0) return;
+    const double meanX = halfSpan * (rootChord + 2.0 * tipChord) / (3.0 * chordSum);
+    const double meanX2 = halfSpan * halfSpan * 2.0
+        * (rootChord / 3.0 - (rootChord - tipChord) / 4.0) / chordSum;
+    const double varianceX = std::max(0.0, meanX2 - meanX * meanX);
+    node.cgLocal.x = (side < 0 ? -1.0 : 1.0) * meanX;
+    node.I0[1][1] += node.kg * varianceX;
+    node.I0[2][2] += node.kg * varianceX;
+}
+
 AeroLayoutProperties aggregateAeroLayout(const AirframeGraph& graph) {
     AeroLayoutProperties result;
     const auto placed = graph.resolve();
@@ -622,9 +637,10 @@ DesignPhysicsProperties aggregateDesignPhysics(const AirframeGraph& graph,
         const glm::dvec3 normal = glm::normalize(rotation * glm::dvec3(0.0, 1.0, 0.0));
         if (!finiteVec(origin) || !finiteVec(normal)) { result.compositionValid = false; return result; }
         // 各instanceは半翼。レンダラの0.65テーパと同じ平均翼弦率0.825を用いる。
-        const double area = 0.5 * st.boomWingSpan * st.boomWingChord * 0.825
-                          * std::abs(normal.y);
+        const double planform = 0.5 * st.boomWingSpan * st.boomWingChord * 0.825;
+        const double area = planform * std::abs(normal.y);
         result.boomWingAreaM2 += area;
+        result.boomWingDragAreaM2 += planform * (0.012 + 1.10 * normal.z * normal.z);
         boomWeightedZ += area * origin.z;
     }
     result.boomWingZ = result.boomWingAreaM2 > 1e-12
@@ -772,6 +788,7 @@ AirframeGraph buildDefaultLayout(const AircraftParams& st, const Analysis& an) {
         MassNode mass = massAt(0, world);
         mass.kg = boomWing.mount.mirror == MirrorMode::Pair ? boomWingKg * 0.5 : boomWingKg;
         mass.analysisItem = -1;
+        applyBoomWingMassDistribution(mass, st, st.boomWing == "R" ? -1 : 1);
         boomWing.massNodes.push_back(mass);
         if (!graph.addPart(std::move(boomWing))) return {};
     }

@@ -60,6 +60,9 @@ struct MassNode {
     int analysisItem = -1;
 };
 
+// 台形半翼の面積重心とスパン方向分布慣性を既存の質量ノードへ設定する。
+void applyBoomWingMassDistribution(MassNode& node, const AircraftParams& st, int side);
+
 struct SparDesign {
     int count = 1;
     double chordFrac = 0.30;
@@ -194,6 +197,7 @@ struct DesignPhysicsProperties {
     double pilotPowerFactor = 1.0;
     double pilotEnergyFactor = 1.0;
     double boomWingAreaM2 = 0.0;
+    double boomWingDragAreaM2 = 0.0;
     double boomWingZ = 0.0;
 };
 
